@@ -43,7 +43,7 @@ jobs:
             runner: ubuntu-latest
             platform: linux/amd64
           - arch: arm64
-            unameArch: aarch64   # what `uname -m` reports on this CPU
+            unameArch: arm64
             runner: ubuntu-24.04-arm
             platform: linux/arm64
     runs-on: ${{ matrix.runner }}
@@ -118,8 +118,6 @@ jobs:
             -X github.com/lolyhexey/hexplus/internal/version.Commit=${COMMIT} \
             -X github.com/lolyhexey/hexplus/internal/version.Date=${DATE}"
           mkdir -p dist
-          # Artifact name matches `uname -m` so the operator who types
-          # `uname -m` on their VPS sees the exact suffix to download.
           go build -ldflags "${LDFLAGS}" -o dist/hexplus-${{ matrix.unameArch }} ./cmd/hexplus
           ls -lh dist/
 
@@ -151,10 +149,7 @@ jobs:
         working-directory: dist
         run: |
           ls -lh .
-          # File naming uses `uname -m` output (x86_64, aarch64) so the
-          # operator on the VPS can run `wget hexplus-$(uname -m)` and
-          # have it just work.
-          sha256sum hexplus-x86_64 hexplus-aarch64 > SHA256SUMS
+          sha256sum hexplus-x86_64 hexplus-arm64 > SHA256SUMS
           cat SHA256SUMS
 
       - name: Create or update GitHub Release
@@ -166,5 +161,5 @@ jobs:
           fail_on_unmatched_files: true
           files: |
             dist/hexplus-x86_64
-            dist/hexplus-aarch64
+            dist/hexplus-arm64
             dist/SHA256SUMS
