@@ -24,8 +24,10 @@ RUN curl -fL "https://matt.ucc.asn.au/dropbear/releases/dropbear-${DROPBEAR_VERS
     && ln -s dropbear-${DROPBEAR_VERSION} dropbear-src
 
 WORKDIR /src/dropbear-src
+# zlib is enabled by default when the lib is present; we install zlib-static
+# above so the final link is fully static. --disable-syslog avoids pulling
+# in libsystemd indirectly.
 RUN ./configure \
-    --disable-zlib=no \
     --disable-syslog \
     --enable-static \
     LDFLAGS="-static" \
