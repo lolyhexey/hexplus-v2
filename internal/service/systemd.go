@@ -90,6 +90,12 @@ func WriteUnits() (WriteResult, error) {
 }
 
 func writeUnitFiles() (written []string, skipped []string, err error) {
+	return writeUnitFilesFor(All())
+}
+
+// writeUnitFilesFor is the underlying writer that both writeUnitFiles
+// (all services) and the per-service lazy install path use.
+func writeUnitFilesFor(svcs []Service) (written []string, skipped []string, err error) {
 	tmpl, err := template.New("unit").Funcs(template.FuncMap{
 		"join": strings.Join,
 	}).Parse(unitTemplate)
@@ -101,7 +107,7 @@ func writeUnitFiles() (written []string, skipped []string, err error) {
 		return nil, nil, fmt.Errorf("mkdir %s: %w", SystemdUnitDir, err)
 	}
 
-	for _, svc := range All() {
+	for _, svc := range svcs {
 		dest := filepath.Join(SystemdUnitDir, svc.UnitName)
 		var buf bytes.Buffer
 		if err := tmpl.Execute(&buf, svc); err != nil {

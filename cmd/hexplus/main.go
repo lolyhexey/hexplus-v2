@@ -28,10 +28,10 @@ import (
 	"github.com/lolyhexey/hexplus/internal/assets"
 	"github.com/lolyhexey/hexplus/internal/extract"
 	"github.com/lolyhexey/hexplus/internal/install"
+	"github.com/lolyhexey/hexplus/internal/menu"
 	"github.com/lolyhexey/hexplus/internal/pki"
 	"github.com/lolyhexey/hexplus/internal/proxy"
 	"github.com/lolyhexey/hexplus/internal/service"
-	"github.com/lolyhexey/hexplus/internal/tui"
 	"github.com/lolyhexey/hexplus/internal/user"
 	"github.com/lolyhexey/hexplus/internal/version"
 )
@@ -124,11 +124,10 @@ func runDefault() {
 	fmt.Println("Run 'sudo hexplus install' to lay down the embedded binaries.")
 }
 
-// runMenu launches the bubble tea TUI. Errors come back rendered so
-// the operator sees something useful if their terminal lacks the
-// alt-screen escapes (e.g. running over a SOCKS-only sshd channel).
+// runMenu launches the v1-identical plain REPL menu (no altscreen, no
+// arrow keys - just clear+print+read like Modulos/menu).
 func runMenu() {
-	if err := tui.Run(); err != nil {
+	if err := menu.Run(); err != nil {
 		fmt.Fprintln(os.Stderr, "menu:", err)
 		os.Exit(1)
 	}
@@ -141,27 +140,6 @@ func runInstall() {
 		os.Exit(1)
 	}
 	fmt.Println("hexplus installed.")
-	for _, p := range res.BinariesWritten {
-		fmt.Printf("  + %s\n", p)
-	}
-	for _, p := range res.BinariesSkipped {
-		fmt.Printf("  = %s (already up-to-date)\n", p)
-	}
-	for _, p := range res.SymlinksCreated {
-		fmt.Printf("  + %s -> dropbearmulti\n", p)
-	}
-	for _, p := range res.UnitsWritten {
-		fmt.Printf("  + %s\n", p)
-	}
-	for _, p := range res.UnitsSkipped {
-		fmt.Printf("  = %s (already up-to-date)\n", p)
-	}
-	for _, p := range res.ConfigsWritten {
-		fmt.Printf("  + %s\n", p)
-	}
-	for _, p := range res.ConfigsSkipped {
-		fmt.Printf("  = %s (preserved)\n", p)
-	}
 	if res.SelfCopied {
 		fmt.Printf("  + %s\n", install.SelfPath)
 	}
@@ -169,18 +147,8 @@ func runInstall() {
 		fmt.Printf("  + %s\n", install.MarkerFile)
 	}
 	fmt.Println()
-	if len(res.UnitsWritten) == 0 && len(res.UnitsSkipped) == 0 {
-		fmt.Println("note: systemd not detected; unit files were skipped.")
-		fmt.Println("      binaries under " + install.LibDir + " can be run manually.")
-	} else {
-		if res.UnitsReloadWarning != nil {
-			fmt.Printf("warning: systemctl daemon-reload failed: %v\n", res.UnitsReloadWarning)
-			fmt.Println("         units are on disk; reload manually after booting into systemd.")
-			fmt.Println()
-		}
-		fmt.Println("next: enable services to start on boot, e.g.")
-		fmt.Println("      systemctl enable --now hexplus-openvpn")
-	}
+	fmt.Println("ขั้นต่อไป: รัน 'hexplus' เพื่อเปิดเมนู - บริการแต่ละตัว (openvpn / squid /")
+	fmt.Println("dropbear) ติดตั้งทีละตัวผ่านเมนู 'โหมดฟังชั่น' (ข้อ 10)")
 }
 
 func runUninstall() {

@@ -27,8 +27,6 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/lolyhexey/hexplus/internal/assets"
-	"github.com/lolyhexey/hexplus/internal/extract"
 	"github.com/lolyhexey/hexplus/internal/paths"
 	"github.com/lolyhexey/hexplus/internal/service"
 )
@@ -43,18 +41,12 @@ const (
 	SelfPath   = paths.SelfPath
 )
 
-// Result is what Install reports back to the CLI for human consumption.
+// Result is what Install reports back to the CLI. Wrapper-only since v2.1:
+// per-service install/uninstall lives in the service package and reports
+// its own InstallResult.
 type Result struct {
-	BinariesWritten    []string
-	BinariesSkipped    []string
-	SymlinksCreated    []string
-	UnitsWritten       []string
-	UnitsSkipped       []string
-	UnitsReloadWarning error // non-fatal; surfaced in the CLI output
-	ConfigsWritten     []string
-	ConfigsSkipped     []string
-	SelfCopied         bool
-	MarkerWritten      bool
+	SelfCopied    bool
+	MarkerWritten bool
 }
 
 // IsInstalled returns true if the install marker exists. Cheap check used
@@ -64,8 +56,21 @@ func IsInstalled() bool {
 	return err == nil
 }
 
-// Install lays down the binaries, copies self to /usr/local/bin/hexplus,
-// and drops the marker file. Returns details for the caller to print.
+// Install registers hexplus on this box without extracting any service
+// binaries. The wrapper-only install matches HEXPLUS v1's mental model:
+// `hexplus install` makes the menu available; individual services
+// (openvpn / squid / dropbear) extract only when the operator picks
+// "ติดตั้ง" inside the menu. The storage cost on a box that only ever
+// uses Squid is ~16 MB (the wrapper) instead of ~25 MB (wrapper + all
+// three binaries).
+//
+// Steps:
+//  1. Create the lib + state dirs.
+//  2. Copy self to /usr/local/bin/hexplus.
+//  3. Drop the install marker.
+//
+// Per-service extract + systemd unit + bootstrap config are owned by
+// service.InstallService(svc).
 func Install() (Result, error) {
 	var res Result
 
@@ -80,48 +85,6 @@ func Install() (Result, error) {
 		return res, fmt.Errorf("mkdir %s: %w", StateDir, err)
 	}
 
-	exres, err := extract.All(assets.Binaries(), LibDir)
-	if err != nil {
-		return res, fmt.Errorf("extract: %w", err)
-	}
-	res.BinariesWritten = exres.Written
-	res.BinariesSkipped = exres.Skipped
-
-	// dropbearmulti dispatches on argv[0]; systemd ExecStart picks up the
-	// basename of the binary path. Symlink dropbear / dropbearkey / scp
-	// against the multi binary so the matching subcommand runs.
-	if err := service.CreateDropbearSymlinks(); err != nil {
-		return res, fmt.Errorf("symlink dropbear helpers: %w", err)
-	}
-	res.SymlinksCreated = []string{
-		LibDir + "/dropbear",
-		LibDir + "/dropbearkey",
-		LibDir + "/scp",
-	}
-
-	// systemd units. Best-effort on non-systemd boxes: write the files,
-	// skip daemon-reload if systemctl isn't there. The Install itself
-	// still succeeds so the binaries are usable manually.
-	if service.SystemdAvailable() {
-		wr, err := service.WriteUnits()
-		if err != nil {
-			return res, fmt.Errorf("write systemd units: %w", err)
-		}
-		res.UnitsWritten = wr.Written
-		res.UnitsSkipped = wr.Skipped
-		res.UnitsReloadWarning = wr.ReloadWarning
-	}
-
-	// Default configs: write only if missing so we never clobber the
-	// operator's edits. /etc/openvpn is mkdir'd but no server.conf is
-	// written - that needs PKI material (P2.x `hexplus pki init`).
-	br, err := service.BootstrapConfigs()
-	if err != nil {
-		return res, fmt.Errorf("bootstrap configs: %w", err)
-	}
-	res.ConfigsWritten = br.Written
-	res.ConfigsSkipped = br.Skipped
-
 	if err := installSelf(); err != nil {
 		return res, fmt.Errorf("install self: %w", err)
 	}
@@ -135,24 +98,24 @@ func Install() (Result, error) {
 	return res, nil
 }
 
-// Uninstall reverses Install: removes /usr/local/lib/hexplus, the marker,
-// and (if it points to our embedded build) the self copy. Service state
-// dirs are left intact - users may want to keep configs/users across
-// a reinstall.
+// Uninstall reverses Install. Per-service binaries get cleaned up
+// through service.UninstallService(svc) loops; this function owns
+// only the wrapper-side state. Configs under /etc are preserved on
+// purpose so the operator can reinstall without losing their
+// squid.conf / server.conf edits.
 func Uninstall() error {
 	if os.Geteuid() != 0 {
 		return errors.New("uninstall requires root; rerun under sudo")
 	}
 
-	// systemd units first - if anything is currently running off them, we
-	// want systemd to forget the unit before the binary disappears so a
-	// stopped service doesn't keep referencing a deleted path.
-	if _, err := service.RemoveUnits(); err != nil {
-		return fmt.Errorf("remove systemd units: %w", err)
+	// Walk known services and best-effort uninstall each one. Failures
+	// are logged but don't stop the overall uninstall - we want the
+	// wrapper to come down even if a half-broken systemd setup blocks
+	// individual service teardown.
+	for _, svc := range service.All() {
+		_, _ = service.UninstallService(svc)
 	}
 
-	// Self copy first so a partial uninstall still leaves the cwd binary
-	// runnable for retries.
 	if err := os.Remove(SelfPath); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("remove %s: %w", SelfPath, err)
 	}
