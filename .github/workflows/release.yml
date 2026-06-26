@@ -33,15 +33,17 @@ permissions:
 
 jobs:
   build:
-    name: Build hexplus-linux-${{ matrix.arch }}
+    name: Build hexplus-${{ matrix.unameArch }}
     strategy:
       fail-fast: false
       matrix:
         include:
           - arch: amd64
+            unameArch: x86_64    # what `uname -m` reports on this CPU
             runner: ubuntu-latest
             platform: linux/amd64
           - arch: arm64
+            unameArch: aarch64   # what `uname -m` reports on this CPU
             runner: ubuntu-24.04-arm
             platform: linux/arm64
     runs-on: ${{ matrix.runner }}
@@ -102,7 +104,7 @@ jobs:
           cp internal/assets/bin/_squid/squid            internal/assets/bin/squid
           file internal/assets/bin/openvpn internal/assets/bin/squid internal/assets/bin/dropbearmulti
 
-      - name: Cross-compile hexplus-linux-${{ matrix.arch }}
+      - name: Cross-compile hexplus-${{ matrix.unameArch }}
         env:
           CGO_ENABLED: '0'
           GOOS: linux
@@ -116,18 +118,20 @@ jobs:
             -X github.com/lolyhexey/hexplus/internal/version.Commit=${COMMIT} \
             -X github.com/lolyhexey/hexplus/internal/version.Date=${DATE}"
           mkdir -p dist
-          go build -ldflags "${LDFLAGS}" -o dist/hexplus-linux-${{ matrix.arch }} ./cmd/hexplus
+          # Artifact name matches `uname -m` so the operator who types
+          # `uname -m` on their VPS sees the exact suffix to download.
+          go build -ldflags "${LDFLAGS}" -o dist/hexplus-${{ matrix.unameArch }} ./cmd/hexplus
           ls -lh dist/
 
       - name: Smoke-test the artifact
         run: |
-          ./dist/hexplus-linux-${{ matrix.arch }} version
-          ./dist/hexplus-linux-${{ matrix.arch }} help | head -5
+          ./dist/hexplus-${{ matrix.unameArch }} version
+          ./dist/hexplus-${{ matrix.unameArch }} help | head -5
 
       - uses: actions/upload-artifact@v4
         with:
-          name: hexplus-linux-${{ matrix.arch }}
-          path: dist/hexplus-linux-${{ matrix.arch }}
+          name: hexplus-${{ matrix.unameArch }}
+          path: dist/hexplus-${{ matrix.unameArch }}
           if-no-files-found: error
           retention-days: 7
 
@@ -147,7 +151,10 @@ jobs:
         working-directory: dist
         run: |
           ls -lh .
-          sha256sum hexplus-linux-* > SHA256SUMS
+          # File naming uses `uname -m` output (x86_64, aarch64) so the
+          # operator on the VPS can run `wget hexplus-$(uname -m)` and
+          # have it just work.
+          sha256sum hexplus-x86_64 hexplus-aarch64 > SHA256SUMS
           cat SHA256SUMS
 
       - name: Create or update GitHub Release
@@ -158,6 +165,6 @@ jobs:
           generate_release_notes: true
           fail_on_unmatched_files: true
           files: |
-            dist/hexplus-linux-amd64
-            dist/hexplus-linux-arm64
+            dist/hexplus-x86_64
+            dist/hexplus-aarch64
             dist/SHA256SUMS
