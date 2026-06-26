@@ -109,6 +109,29 @@ func SetPassword(name, password string) error {
 	return nil
 }
 
+// ChageExpiry runs `chage -E <date> <name>` to update the system-side
+// expiry. Pass a zero time.Time to mark the account as never expiring
+// (chage -E -1).
+//
+// We split this out of CreateSystemUser because the "change expiry"
+// flow runs against an already-created account, where useradd's -e flag
+// no longer applies.
+func ChageExpiry(name string, expires time.Time) error {
+	val := "-1"
+	if !expires.IsZero() {
+		val = expires.UTC().Format("2006-01-02")
+	}
+	cmd := exec.Command("chage", "-E", val, name)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		if errors.Is(err, exec.ErrNotFound) {
+			return errors.New("chage not in PATH; install shadow-utils")
+		}
+		return fmt.Errorf("chage %s: %w: %s", name, err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
 // DeleteSystemUser runs userdel. The --force avoids "mail spool" errors
 // on systems where the user never got a spool to begin with.
 func DeleteSystemUser(name string) error {

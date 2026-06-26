@@ -183,3 +183,90 @@ func Export(name string, ovpnIn OVPNInput) ([]byte, error) {
 	ovpnIn.Username = name
 	return BuildOVPN(ovpnIn)
 }
+
+// UpdateExpiry resets the account's expiry to (today UTC + days). Passing
+// days <= 0 marks the account as never expiring (chage -E -1) and clears
+// the ExpiresAt on the JSON record. We sync the system + DB pair so the
+// menu's "หมดอายุ" column never disagrees with /etc/shadow.
+func UpdateExpiry(name string, days int) error {
+	if os.Geteuid() != 0 {
+		return errors.New("user update-expiry requires root; rerun under sudo")
+	}
+	var expires time.Time
+	if days > 0 {
+		expires = time.Now().UTC().Add(time.Duration(days) * 24 * time.Hour).Truncate(24 * time.Hour)
+	}
+	if err := ChageExpiry(name, expires); err != nil {
+		return err
+	}
+	db, err := Load()
+	if err != nil {
+		return err
+	}
+	rec, ok := db.Users[name]
+	if !ok {
+		// No DB row (user predates HEXPLUS, or imported manually). Create
+		// one so the menu list keeps the new expiry.
+		rec = Record{Name: name, CreatedAt: time.Now().UTC().Truncate(time.Second)}
+	}
+	rec.ExpiresAt = expires
+	db.Users[name] = rec
+	return db.Save()
+}
+
+// UpdateLimit changes only the Limit field on the JSON record. The system
+// account doesn't get touched - HEXPLUS enforces the cap at the proxy/SSH
+// layer, not via /etc/passwd.
+func UpdateLimit(name string, limit int) error {
+	db, err := Load()
+	if err != nil {
+		return err
+	}
+	rec, ok := db.Users[name]
+	if !ok {
+		rec = Record{Name: name, CreatedAt: time.Now().UTC().Truncate(time.Second)}
+	}
+	rec.Limit = limit
+	db.Users[name] = rec
+	return db.Save()
+}
+
+// UpdatePassword resets the system password via chpasswd. No DB row
+// changes - we deliberately don't store the password, only the hash in
+// /etc/shadow that SetPassword puts there.
+func UpdatePassword(name, password string) error {
+	if os.Geteuid() != 0 {
+		return errors.New("user passwd requires root; rerun under sudo")
+	}
+	if password == "" {
+		return errors.New("password is required")
+	}
+	return SetPassword(name, password)
+}
+
+// CleanExpired walks user.List() and removes anyone whose ExpiresAt is
+// strictly before now. Returns the names that were dropped so the caller
+// can show "ลบแล้ว N user".
+//
+// Records with a zero ExpiresAt are "never expire" and skipped.
+func CleanExpired() ([]string, error) {
+	if os.Geteuid() != 0 {
+		return nil, errors.New("user clean-expired requires root; rerun under sudo")
+	}
+	all, err := List()
+	if err != nil {
+		return nil, err
+	}
+	now := time.Now().UTC()
+	var removed []string
+	for _, r := range all {
+		if r.ExpiresAt.IsZero() || !r.ExpiresAt.Before(now) {
+			continue
+		}
+		if err := Remove(r.Name); err != nil {
+			return removed, fmt.Errorf("remove %s: %w", r.Name, err)
+		}
+		removed = append(removed, r.Name)
+	}
+	return removed, nil
+}

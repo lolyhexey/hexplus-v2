@@ -204,8 +204,3 @@ func notImplemented(r *bufio.Reader, opt string) error {
 	return nil
 }
 
-// runMainPage2 is the v1 second page (addhost/delhost/reboot/...). For
-// now it's also a placeholder.
-func runMainPage2(r *bufio.Reader) error {
-	return notImplemented(r, "21")
-}
