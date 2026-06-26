@@ -7,11 +7,13 @@
 /hexplus-*
 *.exe
 
-# Bundled binaries (built separately, copied into internal/assets/bin before final build)
-/internal/assets/bin/openvpn
-/internal/assets/bin/squid
-/internal/assets/bin/dropbear
-/internal/assets/bin/*.tar.gz
+# Bundled binaries (built separately by build/build-statics.sh, then
+# copied into internal/assets/bin/ before the final go build). Ignore
+# everything under that dir except the markers we ship to keep embed.FS
+# walking on a fresh checkout.
+/internal/assets/bin/*
+!/internal/assets/bin/.gitkeep
+!/internal/assets/bin/README.placeholder
 
 # Local dev
 .idea/
