@@ -80,38 +80,42 @@ func paintMainMenu() error {
 	printSep()
 	fmt.Println()
 
-	// The 21-item grid. Two columns, indices 01..10 on the left, 11..21
-	// on the right (with 21 = "หน้าถัดไป"). v1 paints each row as one
-	// echo -e with embedded \n; we use Printf the same way.
-	grid := []struct{ left, right string }{
-		{"สร้างบัญชี ผู้ใช้", "SPEED TEST"},
-		{"สร้างบัญชี ผุ้ใช้ทดลอง", "BANNER"},
-		{"ลบชื่อ ผู้ใช้", "กราฟเเสดงความเร็วเน็ต"},
-		{"เช็คผู้ใช้ ออนไลน์", "เพิ่มประสิทธิภาพ"},
-		{"เปลี่ยนวันหมดอายุ ผู้ใช้", "BACKUP"},
-		{"เปลี่ยนจำกัด การเชื่อมต่อ", "VIRTUAL MEMORY"},
-		{"เปลี่ยนรหัสผ่าน ผู้ใช้", "จำกัดการเชื่อมต่อ ○"},
-		{"ลบผู้ใช้ที่ หมดอายุ", "BAD VPN ○"},
-		{"เช็คบัญชีทั้งหมด", "ONLINE APP ○"},
-		{"โหมดฟังชั่น", "ข้อมูล VPS >>>"},
+	// Two-column grid. BANNER, VIRTUAL MEMORY, BAD VPN, ONLINE APP were
+	// dropped in v2.2 (user feedback — see memory:feedback-dropped-features),
+	// so the right column compacts to 8 surviving entries. Numeric IDs match
+	// the dispatchMain switch below 1:1.
+	grid := []struct {
+		leftIdx, leftLabel   string
+		rightIdx, rightLabel string
+	}{
+		{"01", "สร้างบัญชี ผู้ใช้", "11", "SPEED TEST"},
+		{"02", "สร้างบัญชี ผุ้ใช้ทดลอง", "12", "กราฟเเสดงความเร็วเน็ต"},
+		{"03", "ลบชื่อ ผู้ใช้", "13", "เพิ่มประสิทธิภาพ"},
+		{"04", "เช็คผู้ใช้ ออนไลน์", "14", "BACKUP"},
+		{"05", "เปลี่ยนวันหมดอายุ ผู้ใช้", "15", "จำกัดการเชื่อมต่อ ○"},
+		{"06", "เปลี่ยนจำกัด การเชื่อมต่อ", "16", "ข้อมูล VPS >>>"},
+		{"07", "เปลี่ยนรหัสผ่าน ผู้ใช้", "17", "หน้าถัดไป >>>"},
+		{"08", "ลบผู้ใช้ที่ หมดอายุ", "", ""},
+		{"09", "เช็คบัญชีทั้งหมด", "", ""},
+		{"10", "โหมดฟังชั่น", "", ""},
 	}
-	for i, row := range grid {
-		leftIdx := fmt.Sprintf("%02d", i+1)
-		rightIdx := fmt.Sprintf("%02d", i+11)
+	for _, row := range grid {
+		if row.rightIdx == "" {
+			fmt.Printf("%s[%s%s%s] %s• %s%-32s%s\n",
+				cRedBold, cCyanBold, row.leftIdx, cRedBold,
+				cWhtBold, cYelBold, row.leftLabel, cReset)
+			continue
+		}
 		fmt.Printf("%s[%s%s%s] %s• %s%-32s %s[%s%s%s] %s• %s%s%s\n",
-			cRedBold, cCyanBold, leftIdx, cRedBold,
-			cWhtBold, cYelBold, row.left,
-			cRedBold, cCyanBold, rightIdx, cRedBold,
-			cWhtBold, cYelBold, row.right, cReset)
+			cRedBold, cCyanBold, row.leftIdx, cRedBold,
+			cWhtBold, cYelBold, row.leftLabel,
+			cRedBold, cCyanBold, row.rightIdx, cRedBold,
+			cWhtBold, cYelBold, row.rightLabel, cReset)
 	}
-	// Last row: 00 ออก / 21 หน้าถัดไป  (v1 actually puts หน้าถัดไป at 21,
-	// but our grid above stopped at index 20 = "ข้อมูล VPS". Render 00 +
-	// the "หน้าถัดไป" as the same final line.)
-	fmt.Printf("%s[%s00%s] %s• %s%-32s %s[%s21%s] %s• %s%s%s\n",
+	// Final row: 00 ออก (alone — page-2 link is row 7 right side).
+	fmt.Printf("%s[%s00%s] %s• %s%s%s\n",
 		cRedBold, cCyanBold, cRedBold,
-		cWhtBold, cYelBold, "ออก",
-		cRedBold, cCyanBold, cRedBold,
-		cWhtBold, cYelBold, "หน้าถัดไป >>>", cReset)
+		cWhtBold, cYelBold, "ออก", cReset)
 
 	fmt.Println()
 	printSep()
@@ -132,15 +136,49 @@ func dispatchMain(choice string, r *bufio.Reader) (bool, error) {
 	case "0", "00":
 		fmt.Println(cRedBold + "ออก..." + cReset)
 		return true, nil
+
+	// User mgmt (01-09) — handled by users.go.
+	case "1", "01":
+		return false, runCreateUser(r)
+	case "2", "02":
+		return false, runCreateTrial(r)
+	case "3", "03":
+		return false, runRemoveUser(r)
+	case "4", "04":
+		return false, runSSHMonitor(r)
+	case "5", "05":
+		return false, runChangeExpiry(r)
+	case "6", "06":
+		return false, runChangeLimit(r)
+	case "7", "07":
+		return false, runChangePassword(r)
+	case "8", "08":
+		return false, runCleanExpired(r)
+	case "9", "09":
+		return false, runListUsers(r)
+
+	// โหมดฟังชั่น (services + SOCKS) — handled by conexao.go.
 	case "10":
 		return false, runConexao(r)
-	case "21":
-		// Page 2 - the system-admin grid (addhost/delhost/reboot/etc.)
+
+	// System tools (11-16) — handled by sys.go.
+	case "11":
+		return false, runSpeedTest(r)
+	case "12":
+		return false, runBWChart(r)
+	case "13":
+		return false, runOptimize(r)
+	case "14":
+		return false, runBackup(r)
+	case "15":
+		return false, runLimiter(r)
+	case "16":
+		return false, runVPSInfo(r)
+
+	// Page 2 (admin) — handled by page2.go.
+	case "17":
 		return false, runMainPage2(r)
-	case "1", "01", "2", "02", "3", "03", "4", "04", "5", "05",
-		"6", "06", "7", "07", "8", "08", "9", "09",
-		"11", "12", "13", "14", "15", "16", "17", "18", "19", "20":
-		return false, notImplemented(r, choice)
+
 	default:
 		fmt.Println("\n" + cRedBold + "[ผิดพลาด]" + cYelBold + " ตัวเลือกไม่ถูกต้อง กรุณาเลือกตัวเลขจากเมนู" + cReset)
 		waitEnter(r)
