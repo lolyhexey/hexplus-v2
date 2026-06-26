@@ -47,6 +47,8 @@ func main() {
 		runStatus()
 	case "service":
 		runService(rest)
+	case "logs":
+		runLogs(rest)
 	case "help", "-h", "--help":
 		printUsage(os.Stdout)
 	default:
@@ -73,6 +75,7 @@ Subcommands:
   status               show whether install has been run and which binaries are present
   service <verb> [name]  start/stop/restart/enable/disable/status one or all services
                          (services: openvpn, squid, dropbear)
+  logs <name>            tail systemd journal for one service (--follow, --tail N)
   extract              dev-only: extract embedded assets to --lib-dir without installing
   version              print version metadata
   help                 this message
@@ -330,6 +333,35 @@ func printState(st service.State) {
 	fmt.Printf("  %s %-8s  %s/%s  %s%s  expected %d/%s\n",
 		marker, st.Service.Name, st.ActiveState, st.SubState, enabled, pidPart,
 		st.Service.Port, st.Service.PortProto)
+}
+
+// runLogs handles `hexplus logs <name> [--follow] [--tail N]`.
+// Streams journalctl's stdout/stderr through to the user; for --follow
+// the process blocks until they Ctrl-C.
+func runLogs(args []string) {
+	fs := flag.NewFlagSet("logs", flag.ExitOnError)
+	follow := fs.Bool("follow", false, "stream new entries (-f)")
+	fs.BoolVar(follow, "f", false, "alias for --follow")
+	tail := fs.Int("tail", 0, "show only the last N entries (0 = all)")
+	fs.IntVar(tail, "n", 0, "alias for --tail")
+	if err := fs.Parse(args); err != nil {
+		os.Exit(2)
+	}
+	rest := fs.Args()
+	if len(rest) == 0 {
+		fmt.Fprintln(os.Stderr, "usage: hexplus logs <service> [--follow] [--tail N]")
+		fmt.Fprintf(os.Stderr, "  services: %s\n", strings.Join(service.Names(), ", "))
+		os.Exit(2)
+	}
+	svc, ok := service.ByName(rest[0])
+	if !ok {
+		fmt.Fprintf(os.Stderr, "unknown service %q (known: %s)\n", rest[0], strings.Join(service.Names(), ", "))
+		os.Exit(2)
+	}
+	if err := service.StreamLogs(svc, service.LogsOptions{Follow: *follow, Tail: *tail}); err != nil {
+		fmt.Fprintln(os.Stderr, "logs:", err)
+		os.Exit(1)
+	}
 }
 
 func runExtract(args []string) {
