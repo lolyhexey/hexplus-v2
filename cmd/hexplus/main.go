@@ -19,10 +19,12 @@ import (
 	"fmt"
 	"os"
 	"runtime"
+	"strings"
 
 	"github.com/lolyhexey/hexplus/internal/assets"
 	"github.com/lolyhexey/hexplus/internal/extract"
 	"github.com/lolyhexey/hexplus/internal/install"
+	"github.com/lolyhexey/hexplus/internal/service"
 	"github.com/lolyhexey/hexplus/internal/version"
 )
 
@@ -43,6 +45,8 @@ func main() {
 		runExtract(rest)
 	case "status":
 		runStatus()
+	case "service":
+		runService(rest)
 	case "help", "-h", "--help":
 		printUsage(os.Stdout)
 	default:
@@ -64,12 +68,14 @@ Usage:
   hexplus [subcommand]
 
 Subcommands:
-  install      extract embedded binaries to %s and copy self to %s
-  uninstall    remove what 'install' put down (configs under /etc preserved)
-  status       show whether install has been run and which binaries are present
-  extract      dev-only: extract embedded assets to --lib-dir without installing
-  version      print version metadata
-  help         this message
+  install              extract embedded binaries to %s and copy self to %s
+  uninstall            remove what 'install' put down (configs under /etc preserved)
+  status               show whether install has been run and which binaries are present
+  service <verb> [name]  start/stop/restart/enable/disable/status one or all services
+                         (services: openvpn, squid, dropbear)
+  extract              dev-only: extract embedded assets to --lib-dir without installing
+  version              print version metadata
+  help                 this message
 
 With no subcommand, hexplus prints a banner and, on first run as root, auto-installs.
 `, install.LibDir, install.SelfPath)
@@ -156,6 +162,111 @@ func runStatus() {
 			fmt.Printf("  - %s (missing)\n", path)
 		}
 	}
+}
+
+// runService dispatches the `hexplus service <verb> [name]` subcommand.
+// Verbs that need a target service name (start, stop, restart, enable,
+// disable) error if it's missing. status with no name reports all three.
+func runService(args []string) {
+	if len(args) == 0 {
+		fmt.Fprintln(os.Stderr, "usage: hexplus service <verb> [name]")
+		fmt.Fprintf(os.Stderr, "  verbs: start, stop, restart, enable, disable, status, list\n")
+		fmt.Fprintf(os.Stderr, "  names: %s\n", strings.Join(service.Names(), ", "))
+		os.Exit(2)
+	}
+	verb := args[0]
+	target := ""
+	if len(args) > 1 {
+		target = args[1]
+	}
+
+	if verb == "list" {
+		for _, s := range service.All() {
+			fmt.Printf("  %s\t%s (%d/%s)\n", s.Name, s.UnitName, s.Port, s.PortProto)
+		}
+		return
+	}
+
+	if verb == "status" {
+		if target == "" {
+			states, err := service.StatusAll()
+			if err != nil {
+				fmt.Fprintln(os.Stderr, "service status:", err)
+				os.Exit(1)
+			}
+			for _, st := range states {
+				printState(st)
+			}
+			return
+		}
+		svc, ok := service.ByName(target)
+		if !ok {
+			fmt.Fprintf(os.Stderr, "unknown service %q (known: %s)\n", target, strings.Join(service.Names(), ", "))
+			os.Exit(2)
+		}
+		st, err := service.Status(svc)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "service status:", err)
+			os.Exit(1)
+		}
+		printState(st)
+		return
+	}
+
+	// Action verbs: must have a target.
+	if target == "" {
+		fmt.Fprintf(os.Stderr, "verb %q needs a service name (one of: %s)\n",
+			verb, strings.Join(service.Names(), ", "))
+		os.Exit(2)
+	}
+	svc, ok := service.ByName(target)
+	if !ok {
+		fmt.Fprintf(os.Stderr, "unknown service %q (known: %s)\n", target, strings.Join(service.Names(), ", "))
+		os.Exit(2)
+	}
+
+	var err error
+	switch verb {
+	case "start":
+		err = service.Start(svc)
+	case "stop":
+		err = service.Stop(svc)
+	case "restart":
+		err = service.Restart(svc)
+	case "enable":
+		err = service.Enable(svc)
+	case "disable":
+		err = service.Disable(svc)
+	case "reload":
+		err = service.TryReload(svc)
+	default:
+		fmt.Fprintf(os.Stderr, "unknown verb %q\n", verb)
+		os.Exit(2)
+	}
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "service:", err)
+		os.Exit(1)
+	}
+	fmt.Printf("ok: %s %s\n", verb, svc.UnitName)
+}
+
+func printState(st service.State) {
+	marker := "●"
+	if !st.UnitExists {
+		fmt.Printf("  %s %-8s  unit not installed\n", marker, st.Service.Name)
+		return
+	}
+	enabled := "disabled"
+	if st.Enabled {
+		enabled = "enabled"
+	}
+	pidPart := ""
+	if st.MainPID != "" && st.MainPID != "0" {
+		pidPart = " (PID " + st.MainPID + ")"
+	}
+	fmt.Printf("  %s %-8s  %s/%s  %s%s  expected %d/%s\n",
+		marker, st.Service.Name, st.ActiveState, st.SubState, enabled, pidPart,
+		st.Service.Port, st.Service.PortProto)
 }
 
 func runExtract(args []string) {
