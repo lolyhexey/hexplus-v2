@@ -50,6 +50,8 @@ type Result struct {
 	UnitsWritten       []string
 	UnitsSkipped       []string
 	UnitsReloadWarning error // non-fatal; surfaced in the CLI output
+	ConfigsWritten     []string
+	ConfigsSkipped     []string
 	SelfCopied         bool
 	MarkerWritten      bool
 }
@@ -108,6 +110,16 @@ func Install() (Result, error) {
 		res.UnitsSkipped = wr.Skipped
 		res.UnitsReloadWarning = wr.ReloadWarning
 	}
+
+	// Default configs: write only if missing so we never clobber the
+	// operator's edits. /etc/openvpn is mkdir'd but no server.conf is
+	// written - that needs PKI material (P2.x `hexplus pki init`).
+	br, err := service.BootstrapConfigs()
+	if err != nil {
+		return res, fmt.Errorf("bootstrap configs: %w", err)
+	}
+	res.ConfigsWritten = br.Written
+	res.ConfigsSkipped = br.Skipped
 
 	if err := installSelf(); err != nil {
 		return res, fmt.Errorf("install self: %w", err)

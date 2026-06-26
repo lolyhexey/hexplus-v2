@@ -117,6 +117,12 @@ func runInstall() {
 	for _, p := range res.UnitsSkipped {
 		fmt.Printf("  = %s (already up-to-date)\n", p)
 	}
+	for _, p := range res.ConfigsWritten {
+		fmt.Printf("  + %s\n", p)
+	}
+	for _, p := range res.ConfigsSkipped {
+		fmt.Printf("  = %s (preserved)\n", p)
+	}
 	if res.SelfCopied {
 		fmt.Printf("  + %s\n", install.SelfPath)
 	}
