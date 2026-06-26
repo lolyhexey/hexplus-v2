@@ -1,8 +1,17 @@
 // hexplus - single-binary HEXPLUS v2 entry point.
 //
-// Phase 0 scope: bootstrap that prints version, runs an extract dry-run,
-// and exits. No menu, no service management yet - just enough to confirm
-// the embed/extract pipeline compiles, cross-compiles, and runs on Linux.
+// Subcommands:
+//   (none)         print banner + auto-install if not installed yet
+//   version        print version metadata
+//   install        idempotent install: extract binaries + copy self to /usr/local/bin
+//   uninstall      reverse install (leaves /etc/openvpn etc. alone)
+//   extract        dev-only: extract embedded assets to --lib-dir without installing
+//   status         report install state + presence of each embedded binary on disk
+//
+// Service supervision (running openvpn/squid/dropbear), user management, and
+// the TUI menu are deliberately not here yet - they come in later phases. This
+// file is the install boundary; everything above runs at root once per box,
+// everything else runs from the installed location.
 package main
 
 import (
@@ -13,51 +22,132 @@ import (
 
 	"github.com/lolyhexey/hexplus/internal/assets"
 	"github.com/lolyhexey/hexplus/internal/extract"
+	"github.com/lolyhexey/hexplus/internal/install"
 	"github.com/lolyhexey/hexplus/internal/version"
 )
 
-const defaultLibDir = "/usr/local/lib/hexplus"
-
 func main() {
-	var (
-		showVersion bool
-		dryExtract  bool
-		libDir      string
-	)
-	flag.BoolVar(&showVersion, "version", false, "print version and exit")
-	flag.BoolVar(&dryExtract, "extract", false, "extract embedded assets to --lib-dir then exit (Phase 0 smoke test)")
-	flag.StringVar(&libDir, "lib-dir", defaultLibDir, "where to extract embedded assets")
-	flag.Parse()
-
-	if showVersion {
-		fmt.Println(version.Full())
-		fmt.Printf("  runtime: %s/%s (%s)\n", runtime.GOOS, runtime.GOARCH, runtime.Version())
+	if len(os.Args) < 2 {
+		runDefault()
 		return
 	}
-
-	if dryExtract {
-		if err := runExtract(libDir); err != nil {
-			fmt.Fprintln(os.Stderr, "extract:", err)
-			os.Exit(1)
-		}
-		return
+	cmd, rest := os.Args[1], os.Args[2:]
+	switch cmd {
+	case "version", "-version", "--version":
+		printVersion()
+	case "install":
+		runInstall()
+	case "uninstall":
+		runUninstall()
+	case "extract":
+		runExtract(rest)
+	case "status":
+		runStatus()
+	case "help", "-h", "--help":
+		printUsage(os.Stdout)
+	default:
+		fmt.Fprintln(os.Stderr, "unknown command:", cmd)
+		printUsage(os.Stderr)
+		os.Exit(2)
 	}
-
-	// Default action for Phase 0: print a banner so we can confirm the binary
-	// actually runs after wget+chmod+./hexplus on a bare Linux box.
-	fmt.Println(version.Full())
-	fmt.Printf("running on %s/%s\n", runtime.GOOS, runtime.GOARCH)
-	fmt.Println()
-	fmt.Println("Phase 0 build. The real menu lands in Phase 1.")
-	fmt.Println("Try: hexplus -extract -lib-dir /tmp/hexplus")
 }
 
-func runExtract(dir string) error {
-	res, err := extract.All(assets.Binaries(), dir)
-	if err != nil {
-		return err
+func printVersion() {
+	fmt.Println(version.Full())
+	fmt.Printf("  runtime: %s/%s (%s)\n", runtime.GOOS, runtime.GOARCH, runtime.Version())
+}
+
+func printUsage(w *os.File) {
+	fmt.Fprintf(w, `hexplus - single-binary SSH+VPN management
+
+Usage:
+  hexplus [subcommand]
+
+Subcommands:
+  install      extract embedded binaries to %s and copy self to %s
+  uninstall    remove what 'install' put down (configs under /etc preserved)
+  status       show whether install has been run and which binaries are present
+  extract      dev-only: extract embedded assets to --lib-dir without installing
+  version      print version metadata
+  help         this message
+
+With no subcommand, hexplus prints a banner and, on first run as root, auto-installs.
+`, install.LibDir, install.SelfPath)
+}
+
+func runDefault() {
+	fmt.Println(version.Full())
+	fmt.Printf("running on %s/%s\n\n", runtime.GOOS, runtime.GOARCH)
+	if install.IsInstalled() {
+		fmt.Println("hexplus is installed. The TUI menu lands in a later phase; for now")
+		fmt.Println("you can poke at:")
+		fmt.Println("  hexplus status")
+		fmt.Println("  hexplus uninstall")
+		return
 	}
-	fmt.Printf("extracted into %s:\n", dir)
+	fmt.Println("hexplus has not been installed on this box yet.")
+	fmt.Println("Run 'sudo hexplus install' to lay down the embedded binaries.")
+}
+
+func runInstall() {
+	res, err := install.Install()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "install:", err)
+		os.Exit(1)
+	}
+	fmt.Println("hexplus installed.")
+	for _, p := range res.BinariesWritten {
+		fmt.Printf("  + %s\n", p)
+	}
+	for _, p := range res.BinariesSkipped {
+		fmt.Printf("  = %s (already up-to-date)\n", p)
+	}
+	if res.SelfCopied {
+		fmt.Printf("  + %s\n", install.SelfPath)
+	}
+	if res.MarkerWritten {
+		fmt.Printf("  + %s\n", install.MarkerFile)
+	}
+}
+
+func runUninstall() {
+	if err := install.Uninstall(); err != nil {
+		fmt.Fprintln(os.Stderr, "uninstall:", err)
+		os.Exit(1)
+	}
+	fmt.Println("hexplus uninstalled (state under /etc and /var/lib preserved).")
+}
+
+func runStatus() {
+	fmt.Println(version.Full())
+	if install.IsInstalled() {
+		fmt.Printf("installed: yes (marker at %s)\n", install.MarkerFile)
+	} else {
+		fmt.Println("installed: no")
+	}
+	fmt.Println("embedded binaries on disk:")
+	for _, name := range []string{"openvpn", "squid", "dropbearmulti"} {
+		path := install.LibDir + "/" + name
+		if st, err := os.Stat(path); err == nil {
+			fmt.Printf("  + %s (%s, %d bytes)\n", path, st.Mode(), st.Size())
+		} else {
+			fmt.Printf("  - %s (missing)\n", path)
+		}
+	}
+}
+
+func runExtract(args []string) {
+	fs := flag.NewFlagSet("extract", flag.ExitOnError)
+	libDir := fs.String("lib-dir", install.LibDir, "where to extract embedded assets")
+	if err := fs.Parse(args); err != nil {
+		os.Exit(2)
+	}
+	res, err := extract.All(assets.Binaries(), *libDir)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "extract:", err)
+		os.Exit(1)
+	}
+	fmt.Printf("extracted into %s:\n", *libDir)
 	for _, p := range res.Written {
 		fmt.Printf("  + %s\n", p)
 	}
@@ -65,7 +155,6 @@ func runExtract(dir string) error {
 		fmt.Printf("  = %s (already up-to-date)\n", p)
 	}
 	if len(res.Written)+len(res.Skipped) == 0 {
-		fmt.Println("  (nothing embedded yet - waiting on build/build-statics.sh)")
+		fmt.Println("  (nothing embedded yet)")
 	}
-	return nil
 }

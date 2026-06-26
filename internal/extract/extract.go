@@ -42,6 +42,13 @@ func All(src fs.FS, destDir string) (Result, error) {
 		if d.Name() == ".gitkeep" || strings.HasSuffix(d.Name(), ".placeholder") {
 			return nil
 		}
+		// Skip buildx scratch dirs (_arch/ tree left over from
+		// 'docker buildx build --output type=local'). They mirror the
+		// real binaries we already extracted at the top level, so
+		// shipping both doubles the embed and litters the install dir.
+		if d.IsDir() && strings.HasPrefix(d.Name(), "_") {
+			return fs.SkipDir
+		}
 		target := filepath.Join(destDir, path)
 		if d.IsDir() {
 			return os.MkdirAll(target, 0o755)
