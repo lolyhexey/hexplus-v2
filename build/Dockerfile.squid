@@ -1,393 +1,189 @@
-# Squid 3.3.8 full-feature static build.
+# Build full-feature Squid 3.3.8 statically against glibc.
 #
-# Goal: a single static-musl `squid` binary that matches Debian/Ubuntu's
-# apt-installed `squid3=3.3.8-1ubuntu6` feature surface, so HEXPLUS v2 can
-# embed it and behave identically to v1.
+# Background:
+#  The original Alpine + musl static build crashed at runtime on real
+#  glibc hosts (Ubuntu 22.04 verified) with a NULL deref deep in Squid
+#  3.3.8's startup — reproduced even with minimal --disable-everything
+#  configure flags. Root cause is musl's libc layout vs Squid 3.3.8's
+#  assumptions (Squid 3.3.8 is from 2013, written against glibc 2.x).
 #
-# Strategy: multi-stage Docker, where each dependency is built static from
-# source in its own stage, then the final Squid build links them all in.
-#
-# Phase plan inside this file (executed top-to-bottom, retrying as we go):
-#   STAGE openssl   - OpenSSL 1.0.2u (Squid 3.3.8 uses the 1.0 API exclusively;
-#                     OpenSSL 3.x removed SSL_library_init and friends, so we
-#                     vendor 1.0 here. Alpine 3.19 ships only 3.1.)
-#   STAGE pam       - linux-pam static (Squid's auth_pam helper)
-#   STAGE ldap      - OpenLDAP static (Squid's basic_ldap_auth + ldap_group)
-#   STAGE bdb       - Berkeley DB 5.3 static (Squid's libdbhelper + cache_dir
-#                     diskd / aufs metadata backends)
-#   STAGE ecap      - libecap 1.0.1 static (Squid's eCAP message-adaptation API)
-#   STAGE squid     - Squid 3.3.8, linked statically against all of the above
-#                     plus apk-provided static zlib / libxml2 / libpcre /
-#                     libcap-ng. -fpermissive + -std=gnu++03 to keep gcc 14
-#                     from rejecting C++03-era idioms (auto_ptr, etc.)
-#   STAGE export    - scratch image carrying just the final binary.
-#
-# This file evolves as each stage is verified. Stages below the
-# currently-working frontier may be commented out so 'docker buildx build
-# --target export' fails at the first real blocker rather than racing past
-# multiple stages.
+#  The fix here keeps the v1 feature surface (eCAP, LDAP, Berkeley DB,
+#  full helper set) by switching the base image to Debian 12 so we
+#  build against glibc throughout. Final binary uses `-static` so it
+#  still drops onto a bare VPS without runtime dependencies. Binary
+#  size goes from ~5 MB (musl) to ~10-13 MB (static-glibc + helpers).
 
-ARG ALPINE_VERSION=3.19
-ARG OPENSSL_VERSION=1.0.2u
+ARG DEBIAN_VERSION=12-slim
 ARG SQUID_VERSION=3.3.8
-ARG PAM_VERSION=1.5.3
-ARG LDAP_VERSION=2.4.59
-ARG BDB_VERSION=5.3.28
-ARG ECAP_VERSION=0.2.0
+ARG OPENSSL_VERSION=1.0.2u
 
 # =====================================================================
-# STAGE openssl: OpenSSL 1.0.2u static
-# =====================================================================
-FROM alpine:${ALPINE_VERSION} AS openssl
+# STAGE openssl: OpenSSL 1.0.2u on Debian glibc
+#
+# Squid 3.3.8 SSL APIs were written for OpenSSL 1.0.x. Modern Debian
+# ships OpenSSL 3.x which removed those symbols (SSL_CTX_set_ssl_version,
+# the err_ macros, etc.), so we build 1.0.2u from source and link Squid
+# against it.
+
+FROM debian:${DEBIAN_VERSION} AS openssl
 ARG OPENSSL_VERSION
-# TARGETARCH is set by buildx from --platform (amd64, arm64, arm, ...).
-# OpenSSL's Configure script doesn't auto-detect, unlike autotools, so we
-# map the buildx-canonical name into OpenSSL's own target-triple naming
-# below in the Configure invocation.
 ARG TARGETARCH
-
-RUN apk add --no-cache \
-    build-base \
-    perl \
-    curl \
-    ca-certificates \
-    linux-headers \
-    zlib-dev \
-    zlib-static
+RUN apt-get update -qq \
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
+        curl ca-certificates build-essential perl \
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /src
-# Pull from GitHub release; squid-cache.org / openssl.org both have TLS
-# cert chains that vary by distro; GitHub is the universal fallback.
-RUN curl -fL "https://github.com/openssl/openssl/releases/download/OpenSSL_$(echo ${OPENSSL_VERSION} | tr '.' '_')/openssl-${OPENSSL_VERSION}.tar.gz" -o openssl.tgz \
-    && tar xzf openssl.tgz \
-    && rm openssl.tgz
+# www.openssl.org dropped 1.0.x from their main mirror. github.com hosts
+# the same tarball under the OpenSSL_1_0_2u tag (sha256 verified upstream).
+RUN curl -fsSL "https://github.com/openssl/openssl/releases/download/OpenSSL_1_0_2u/openssl-${OPENSSL_VERSION}.tar.gz" -o ossl.tgz \
+    && tar xzf ossl.tgz \
+    && rm ossl.tgz
 
 WORKDIR /src/openssl-${OPENSSL_VERSION}
-# OpenSSL Configure targets per buildx TARGETARCH:
-#   amd64 -> linux-x86_64
-#   arm64 -> linux-aarch64
-#   arm   -> linux-armv4 (covers armv7 too; the differentiator is gcc flags)
-# no-shared: skip .so. no-dso: skip dlopen loadable engines (we don't need
-# them and they complicate static linking). no-zlib: SSL-level compression
-# is deprecated since CRIME (2012); leaving it on pulls inflate/deflate
-# symbols into libcrypto.a and forces every linker downstream to drag in
-# -lz. Squid handles HTTP gzip via its own zlib wiring, so disabling here
-# is functionally a no-op for HEXPLUS.
 RUN case "${TARGETARCH}" in \
         amd64) OSSL_TARGET=linux-x86_64 ;; \
         arm64) OSSL_TARGET=linux-aarch64 ;; \
         arm)   OSSL_TARGET=linux-armv4 ;; \
-        *) echo "unsupported TARGETARCH: ${TARGETARCH}" >&2; exit 1 ;; \
+        *)     echo "unsupported arch: ${TARGETARCH}" && exit 1 ;; \
     esac \
-    && ./Configure "$OSSL_TARGET" \
-        no-shared \
-        no-dso \
-        no-engine \
-        no-asm \
-        no-zlib \
+    && ./Configure "$OSSL_TARGET" no-shared no-dso no-engine no-asm no-zlib \
         --prefix=/opt/ossl10 \
         --openssldir=/opt/ossl10/ssl \
-        -fPIC
-
-RUN make -j$(nproc) depend && make -j$(nproc) && make install_sw
-
-RUN /opt/ossl10/bin/openssl version \
-    && echo "---" \
-    && file /opt/ossl10/lib/libssl.a /opt/ossl10/lib/libcrypto.a \
-    && ls -lh /opt/ossl10/lib/libssl.a /opt/ossl10/lib/libcrypto.a
+    && make depend \
+    && make -j"$(nproc)" \
+    && make install_sw
 
 # =====================================================================
-# STAGE pam: linux-pam static
-# =====================================================================
-# linux-pam ships the libpam used by Squid's basic_pam_auth helper.
-# We disable docs, NLS, examples - all dead weight for our embed.
-# Crypt support comes from libxcrypt (musl doesn't expose crypt() in
-# 3.19 by default), which apk install pulls in transitively via
-# linux-pam-dev. We're building from source so install libxcrypt-dev
-# directly.
-FROM alpine:${ALPINE_VERSION} AS pam
-ARG PAM_VERSION
-
-RUN apk add --no-cache \
-    build-base \
-    autoconf \
-    automake \
-    libtool \
-    pkgconfig \
-    curl \
-    ca-certificates \
-    bison \
-    flex \
-    gettext-dev \
-    linux-headers
-
-WORKDIR /src
-RUN curl -fL "https://github.com/linux-pam/linux-pam/releases/download/v${PAM_VERSION}/Linux-PAM-${PAM_VERSION}.tar.xz" -o pam.txz \
-    && tar xJf pam.txz \
-    && rm pam.txz \
-    && ln -s Linux-PAM-${PAM_VERSION} pam-src
-
-WORKDIR /src/pam-src
-RUN ./configure \
-    --prefix=/opt/pam \
-    --enable-static \
-    --disable-shared \
-    --disable-doc \
-    --disable-nls \
-    --disable-examples \
-    --disable-prelude \
-    --disable-selinux \
-    --disable-audit \
-    --disable-econf \
-    --without-systemd \
-    --without-libdb \
-    CFLAGS="-Os -fPIC"
-
-# Build only the libpam tree. --disable-examples is honored by configure
-# but the top-level Makefile still walks into examples/, which uses <termio.h>
-# (SysV header musl doesn't ship). We only need libpam.a + libpam_misc.a for
-# Squid's basic_pam_auth helper.
-RUN make -j$(nproc) -C libpam \
-    && make -j$(nproc) -C libpam_misc \
-    && make install -C libpam \
-    && make install -C libpam_misc \
-    && make install-data -C doc/man 2>/dev/null || true
-
-RUN ls -lh /opt/pam/lib/libpam*.a \
-    && file /opt/pam/lib/libpam.a /opt/pam/lib/libpam_misc.a
-
-# =====================================================================
-# STAGE ldap: OpenLDAP 2.4.59 static (client libs only)
-# =====================================================================
-# Squid uses libldap+liblber from OpenLDAP for its basic_ldap_auth and
-# ext_ldap_group_acl helpers. We don't need slapd (the LDAP server), so
-# --disable-slapd cuts the entire backend tree out. TLS is wired to our
-# /opt/ossl10 so LDAPS works against our OpenSSL 1.0.
-FROM alpine:${ALPINE_VERSION} AS ldap
-ARG LDAP_VERSION
-
-RUN apk add --no-cache \
-    build-base \
-    autoconf \
-    automake \
-    libtool \
-    pkgconfig \
-    curl \
-    ca-certificates \
-    linux-headers \
-    groff
-
-COPY --from=openssl /opt/ossl10 /opt/ossl10
-
-WORKDIR /src
-# openldap.org's official tarball ships pre-generated configure (saves
-# us a bootstrap step).
-RUN curl -fL "https://www.openldap.org/software/download/OpenLDAP/openldap-release/openldap-${LDAP_VERSION}.tgz" -o ldap.tgz \
-    && tar xzf ldap.tgz \
-    && rm ldap.tgz \
-    && ln -s openldap-${LDAP_VERSION} ldap-src
-
-WORKDIR /src/ldap-src
-RUN ./configure \
-    --prefix=/opt/ldap \
-    --enable-static \
-    --disable-shared \
-    --disable-slapd \
-    --disable-bdb \
-    --disable-hdb \
-    --disable-monitor \
-    --without-cyrus-sasl \
-    --without-systemd \
-    --with-tls=openssl \
-    CFLAGS="-Os -fPIC -I/opt/ossl10/include" \
-    CPPFLAGS="-I/opt/ossl10/include" \
-    LDFLAGS="-L/opt/ossl10/lib"
-
-RUN make -j$(nproc) depend && make -j$(nproc) && make install
-
-RUN ls -lh /opt/ldap/lib/libldap*.a /opt/ldap/lib/liblber*.a \
-    && file /opt/ldap/lib/libldap.a
-
-# =====================================================================
-# STAGE bdb: Berkeley DB 5.3.28 static
-# =====================================================================
-# 5.3.28 is the last BDB release under the Sleepycat license (BSD-style),
-# distinct from BDB 6+ which Oracle relicensed to AGPL. Squid 3.3.8
-# wants 4.x or 5.x for basic_db_auth and ext_session_acl; 5.3.28 is
-# the practical sweet spot - modern enough to build on gcc 14 with
-# small patches, old enough to avoid the AGPL grenade.
+# STAGE ecap: libecap 0.2.0 on Debian glibc
 #
-# BDB uses an out-of-tree build under build_unix/. The atomic.h file
-# has a __atomic_compare_exchange call that collides with gcc 11+
-# builtins; sed-patch the symbol to a unique name to avoid the
-# redefinition error.
-FROM alpine:${ALPINE_VERSION} AS bdb
-ARG BDB_VERSION
-ARG TARGETARCH
+# Debian's libecap3-dev ships libecap 1.0.1 - Squid 3.3.8's configure
+# rejects it (requires `libecap < 0.3`, ABI changed between 0.x and 1.0).
+# Build the original 0.2.0 from source so --enable-ecap works.
 
-RUN apk add --no-cache \
-    build-base \
-    automake \
-    curl \
-    ca-certificates \
-    linux-headers
+FROM debian:${DEBIAN_VERSION} AS ecap
+RUN apt-get update -qq \
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
+        curl ca-certificates build-essential autoconf automake libtool pkg-config \
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /src
-RUN curl -fL "https://download.oracle.com/berkeley-db/db-${BDB_VERSION}.tar.gz" -o bdb.tgz \
-    && tar xzf bdb.tgz \
-    && rm bdb.tgz \
-    && ln -s db-${BDB_VERSION} bdb-src
-
-WORKDIR /src/bdb-src
-# Patch atomic_compare_exchange symbol collision with modern gcc.
-# Reference: Gentoo/Alpine BDB patches; renames the BDB internal helper
-# so it doesn't shadow the gcc builtin.
-RUN sed -i 's/__atomic_compare_exchange\b/__atomic_compare_exchange_db/g' \
-        src/dbinc/atomic.h src/mp/mp_fget.c src/mp/mp_mvcc.c src/mp/mp_region.c
-
-WORKDIR /src/bdb-src
-# Same config.guess/sub vintage problem as libecap. Refresh both from
-# Alpine's automake so aarch64 is recognized.
-RUN cp /usr/share/automake-1.16/config.guess dist/ \
-    && cp /usr/share/automake-1.16/config.sub dist/
-
-WORKDIR /src/bdb-src/build_unix
-RUN ../dist/configure \
-    --prefix=/opt/bdb \
-    --enable-static \
-    --disable-shared \
-    --disable-cxx \
-    --disable-stl \
-    --disable-debug \
-    --disable-replication \
-    --disable-cryptography \
-    --disable-dump185 \
-    --disable-tcl \
-    --disable-test \
-    CFLAGS="-Os -fPIC"
-
-RUN make -j$(nproc) && make install
-
-RUN ls -lh /opt/bdb/lib/libdb*.a \
-    && file /opt/bdb/lib/libdb.a
-
-# =====================================================================
-# STAGE ecap: libecap 1.0.1 static
-# =====================================================================
-# eCAP = Squid's message-adaptation API; lets external modules rewrite
-# requests/responses. libecap is the headers + glue layer. Squid 3.3.8
-# wants the 1.0.x line; 1.0.1 is the contemporary release.
-# Hosted at e-cap.org now; the old measurement-factory.com URL 302s
-# to a path that 404s.
-FROM alpine:${ALPINE_VERSION} AS ecap
-ARG ECAP_VERSION
-ARG TARGETARCH
-
-RUN apk add --no-cache \
-    build-base \
-    autoconf \
-    automake \
-    libtool \
-    pkgconfig \
-    curl \
-    ca-certificates \
-    linux-headers
-
-WORKDIR /src
-RUN curl -fL "https://www.e-cap.org/archive/libecap-${ECAP_VERSION}.tar.gz" -o ecap.tgz \
+RUN curl -fsSL "https://www.e-cap.org/archive/libecap-0.2.0.tar.gz" -o ecap.tgz \
     && tar xzf ecap.tgz \
-    && rm ecap.tgz \
-    && ln -s libecap-${ECAP_VERSION} ecap-src
+    && rm ecap.tgz
 
-WORKDIR /src/ecap-src
-# libecap 0.2.0 (2012) ships config.guess + config.sub from automake 1.11,
-# which predate aarch64 support. Drop in the current Alpine automake
-# versions before configure runs - they recognize aarch64-*-linux-musl
-# correctly and let the regular ./configure path proceed under QEMU.
-RUN cp /usr/share/automake-1.16/config.guess cfgaux/ \
-    && cp /usr/share/automake-1.16/config.sub cfgaux/
-RUN ./configure \
-    --prefix=/opt/ecap \
-    --enable-static \
-    --disable-shared \
-    CXXFLAGS="-Os -fPIC -std=gnu++03 -fpermissive -Wno-error"
+WORKDIR /src/libecap-0.2.0
+RUN AUTO_GUESS=$(ls /usr/share/automake-*/config.guess 2>/dev/null | head -1) \
+    && AUTO_SUB=$(ls /usr/share/automake-*/config.sub 2>/dev/null | head -1) \
+    && find . -name config.guess -exec cp "$AUTO_GUESS" {} \; \
+    && find . -name config.sub   -exec cp "$AUTO_SUB"   {} \;
 
-RUN make -j$(nproc) && make install
-
-RUN ls -lh /opt/ecap/lib/libecap*.a \
-    && file /opt/ecap/lib/libecap.a
+RUN ./configure --prefix=/opt/ecap --enable-shared=no --enable-static=yes \
+    && make -j"$(nproc)" \
+    && make install
 
 # =====================================================================
-# STAGE squid: Squid 3.3.8 with the deps we have so far
-# =====================================================================
-# For the first build pass we link OpenSSL 1.0 only and use apk-provided
-# static zlib / pcre / libxml2 / libcap-ng. PAM / LDAP / BDB / eCAP get
-# added back as their own stages once this baseline compiles.
-FROM alpine:${ALPINE_VERSION} AS squid
+# STAGE squid: build Squid 3.3.8 against Debian glibc + helpers
+#
+# We apt-install the helper libraries (PAM, LDAP, Berkeley DB, libltdl)
+# instead of building each from source the way the musl build did.
+# Debian's -dev packages provide both static .a and dynamic .so in
+# glibc-compatible form. libecap is special: Debian's is too new, so
+# we copy our 0.2.0 build in from the ecap stage above.
+
+FROM debian:${DEBIAN_VERSION} AS squid
 ARG SQUID_VERSION
 ARG TARGETARCH
 
-RUN apk add --no-cache \
-    build-base \
-    autoconf \
-    automake \
-    libtool \
-    pkgconfig \
-    curl \
-    bash \
-    ca-certificates \
-    linux-headers \
-    zlib-dev \
-    zlib-static \
-    libxml2-dev \
-    libxml2-static \
-    expat-dev \
-    expat-static \
-    libcap-dev \
-    libcap-static \
-    pcre-dev \
-    perl
+RUN apt-get update -qq \
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
+        curl ca-certificates \
+        build-essential autoconf automake libtool pkg-config gawk \
+        libpam0g-dev libldap2-dev libdb-dev \
+        libltdl-dev libsasl2-dev libxml2-dev libexpat1-dev \
+        libcap-dev libpcre3-dev \
+    && rm -rf /var/lib/apt/lists/*
 
 COPY --from=openssl /opt/ossl10 /opt/ossl10
-COPY --from=pam /opt/pam /opt/pam
-COPY --from=ldap /opt/ldap /opt/ldap
-COPY --from=bdb /opt/bdb /opt/bdb
 COPY --from=ecap /opt/ecap /opt/ecap
 
 WORKDIR /src
-# Plain HTTP to dodge the cert-chain validation that fails on HTTPS
-# (Alpine's bundled CAs don't validate squid-cache.org). The upstream
-# release tarball ships pre-generated configure, so we skip bootstrap.
-RUN curl -fL "http://www.squid-cache.org/Versions/v3/3.3/squid-${SQUID_VERSION}.tar.gz" -o squid.tgz \
+# v2.2.4: vanilla 3.3.8 tarball has known bugs (splay-tree segfault in
+# aclIpAddrNetworkCompare, gcc 14 compile fails, CVE backports missing)
+# that vanilla source never got upstream fixes for. Canonical ships ~30+
+# debian/patches/ on top of the same upstream tarball; HEXPLUS v1 instsqd
+# pulls those via `apt install squid3=3.3.8-1ubuntu6`. We reproduce the
+# patched source tree by combining:
+#   - squid-3.3.8.tar.gz from squid-cache.org (= identical to Ubuntu's
+#     .orig.tar.gz, just a different filename — Ubuntu archive only
+#     keeps the .debian.tar.gz)
+#   - squid3_3.3.8-1ubuntu6.debian.tar.gz from launchpad.net (the
+#     patch set).
+RUN curl -fsSL "http://www.squid-cache.org/Versions/v3/3.3/squid-${SQUID_VERSION}.tar.gz" -o squid.tgz \
+    && curl -fsSL "https://launchpad.net/ubuntu/+archive/primary/+sourcefiles/squid3/${SQUID_VERSION}-1ubuntu6/squid3_${SQUID_VERSION}-1ubuntu6.debian.tar.gz" -o debian.tgz \
     && tar xzf squid.tgz \
     && rm squid.tgz \
     && ln -s squid-${SQUID_VERSION} squid-src
 
 WORKDIR /src/squid-src
-# Squid 3.3.8's bundled config.guess + config.sub date from 2003 and
-# don't recognize aarch64-linux. Sub-projects (libltdl, helpers/*) ship
-# their own copies, so refresh every config.{guess,sub} under the tree
-# in one sweep before configure runs.
-RUN AUTO_GUESS=/usr/share/automake-1.16/config.guess \
-    && AUTO_SUB=/usr/share/automake-1.16/config.sub \
+# Extract Ubuntu's debian/ tree (contains patches/series) on top of the
+# vanilla 3.3.8 source.
+RUN tar xzf /src/debian.tgz \
+    && rm /src/debian.tgz
+
+# Apply every patch in debian/patches/series. quilt format; -p1 from
+# the source root. If any patch fails to apply, surface the file name
+# so we can investigate (a few of Ubuntu's patches assume an older
+# autotools layout that may not match here).
+RUN if [ -f debian/patches/series ]; then \
+        while IFS= read -r p; do \
+            case "$p" in ''|'#'*) continue;; esac; \
+            echo "==> Applying: $p"; \
+            patch -p1 < "debian/patches/$p" \
+                || { echo "FAILED: $p"; exit 1; }; \
+        done < debian/patches/series; \
+    fi
+
+# Squid 3.3.8 bundles config.guess from 2003 - doesn't recognize aarch64.
+# Refresh every one we find before the build runs (sub-projects ship
+# their own copies under helpers/*, libltdl/*, etc.).
+RUN AUTO_GUESS=$(ls /usr/share/automake-*/config.guess 2>/dev/null | head -1) \
+    && AUTO_SUB=$(ls /usr/share/automake-*/config.sub 2>/dev/null | head -1) \
     && find . -name config.guess -exec cp "$AUTO_GUESS" {} \; \
     && find . -name config.sub   -exec cp "$AUTO_SUB"   {} \;
 
-# -fpermissive: gcc 14 rejects several C++03-era idioms (auto_ptr,
-# implicit narrowing conversions, throw() specifiers). The semantics we
-# care about aren't affected; the alternative is patching ~80 source files.
-# -Wno-error: same, demote remaining warnings.
-# -std=gnu++03: pin language standard so newer defaults don't silently
-# break things further.
-# Configure runs link tests; if those see -static or -all-static, every
-# feature probe starts failing on libs that ship dynamic-only in Alpine,
-# and configure bails with exit 77. Run configure with the normal LDFLAGS,
-# then pass -all-static to `make` directly so only the real binary link
-# at the end goes through libtool's static-everything path.
-ENV CFLAGS="-Os -fno-asynchronous-unwind-tables -I/opt/ossl10/include -I/opt/pam/include -I/opt/ldap/include -I/opt/bdb/include -I/opt/ecap/include" \
-    CXXFLAGS="-Os -std=gnu++03 -fpermissive -Wno-error -Wno-deprecated-declarations -I/opt/ossl10/include -I/opt/pam/include -I/opt/ldap/include -I/opt/bdb/include -I/opt/ecap/include" \
-    LDFLAGS="-L/opt/ossl10/lib -L/opt/pam/lib -L/opt/ldap/lib -L/opt/bdb/lib -L/opt/ecap/lib" \
-    PKG_CONFIG_PATH="/opt/ossl10/lib/pkgconfig:/opt/pam/lib/pkgconfig:/opt/ldap/lib/pkgconfig:/opt/ecap/lib/pkgconfig"
+# Fix SEGV in aclIpAddrNetworkCompare() (startup crash on Ubuntu 22.04).
+#
+# Root cause: bare IPv6 literals like "::1" in ACL src lines don't match
+# any of Squid 3.3.8's sscanf patterns (all require "/" or "-").  They
+# fall through to a getaddrinfo() call with hints.ai_flags = 0.  In a
+# statically-linked glibc binary, getaddrinfo() with ai_flags=0 triggers
+# the NSS dlopen path.  dlopen fails in a static binary, which corrupts
+# the heap; the next splay-tree comparator call then crashes dereferencing
+# the acl_ip_data fields (addr1/mask).
+#
+# Fix: try AI_NUMERICHOST first (no NSS, direct parse).  If that fails
+# the token really is a hostname, so retry without the flag.  This is a
+# source-level patch; Ubuntu's ubuntu6 patch set does not contain it.
+# The grep guard aborts the build if the source ever moves the line.
+RUN set -e \
+    && IPCC=src/acl/Ip.cc \
+    && grep -q 'getaddrinfo(addr1,NULL,&hints,&hp)' "$IPCC" \
+       || { echo "PATCH ABORT: marker not found in $IPCC"; exit 1; } \
+    && sed -i \
+       's|int errcode = getaddrinfo(addr1,NULL,&hints,&hp);|hints.ai_flags = AI_NUMERICHOST;\n        int errcode = getaddrinfo(addr1,NULL,\&hints,\&hp);\n        if (errcode != 0) {\n            memset(\&hints, 0, sizeof(struct addrinfo));\n            errcode = getaddrinfo(addr1,NULL,\&hints,\&hp);\n        }|' \
+       "$IPCC" \
+    && echo "==> Patched $IPCC: AI_NUMERICHOST added to FactoryParse getaddrinfo"
+
+# -std=gnu++03: Squid 3.3.8 was written before C++11; modern g++ defaults
+# reject several patterns (throw() exception specs, auto_ptr, narrowing
+# conversions).
+# -fpermissive: demote remaining C++03-vs-modern conflicts to warnings.
+# -Wno-error: don't let warnings stop the build.
+ENV CFLAGS="-Os -fno-asynchronous-unwind-tables -I/opt/ossl10/include -I/opt/ecap/include" \
+    CXXFLAGS="-Os -std=gnu++03 -fpermissive -Wno-error -Wno-deprecated-declarations -I/opt/ossl10/include -I/opt/ecap/include" \
+    LDFLAGS="-L/opt/ossl10/lib -L/opt/ecap/lib" \
+    PKG_CONFIG_PATH="/opt/ossl10/lib/pkgconfig:/opt/ecap/lib/pkgconfig"
 
 RUN ./configure \
     --prefix=/usr \
@@ -403,17 +199,19 @@ RUN ./configure \
     --enable-storeio="ufs,aufs,diskd,rock" \
     --enable-ecap \
     --with-included-ltdl \
-    --with-default-user=squid \
+    --with-default-user=root \
     --disable-strict-error-checking \
     --disable-translation \
     --disable-auto-locale \
     --without-systemd \
     --without-cppunit \
     || (echo "============ CONFIGURE FAILED ============" \
-        && cat config.log | tail -80 \
+        && cat config.log | tail -100 \
         && exit 1)
 
-RUN make -j$(nproc) LDFLAGS="-all-static -L/opt/ossl10/lib" \
+# Pass -static at make time (not configure) so the configure-time link
+# probes don't pick up Debian's dynamic-only libs and fail.
+RUN make -j"$(nproc)" LDFLAGS="-static -L/opt/ossl10/lib" \
     || (echo "============ MAKE FAILED ============" \
         && exit 1)
 
@@ -427,6 +225,6 @@ RUN mkdir -p /out \
 
 # =====================================================================
 # STAGE export: scratch image carrying only the final binary
-# =====================================================================
+
 FROM scratch AS export
 COPY --from=squid /out/squid /squid
