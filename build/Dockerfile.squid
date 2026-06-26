@@ -40,6 +40,11 @@ ARG ECAP_VERSION=0.2.0
 # =====================================================================
 FROM alpine:${ALPINE_VERSION} AS openssl
 ARG OPENSSL_VERSION
+# TARGETARCH is set by buildx from --platform (amd64, arm64, arm, ...).
+# OpenSSL's Configure script doesn't auto-detect, unlike autotools, so we
+# map the buildx-canonical name into OpenSSL's own target-triple naming
+# below in the Configure invocation.
+ARG TARGETARCH
 
 RUN apk add --no-cache \
     build-base \
@@ -58,21 +63,31 @@ RUN curl -fL "https://github.com/openssl/openssl/releases/download/OpenSSL_$(ech
     && rm openssl.tgz
 
 WORKDIR /src/openssl-${OPENSSL_VERSION}
-# linux-x86_64: target triple. no-shared: skip .so. no-dso: skip dlopen
-# loadable engines, which we don't need and which complicate static linking.
-# no-zlib: SSL-level compression is deprecated since CRIME (2012); leaving
-# it on pulls inflate/deflate symbols into libcrypto.a and forces every
-# linker downstream to drag in -lz. Squid handles HTTP gzip via its own
-# zlib wiring, so disabling here is functionally a no-op for HEXPLUS.
-RUN ./Configure linux-x86_64 \
-    no-shared \
-    no-dso \
-    no-engine \
-    no-asm \
-    no-zlib \
-    --prefix=/opt/ossl10 \
-    --openssldir=/opt/ossl10/ssl \
-    -fPIC
+# OpenSSL Configure targets per buildx TARGETARCH:
+#   amd64 -> linux-x86_64
+#   arm64 -> linux-aarch64
+#   arm   -> linux-armv4 (covers armv7 too; the differentiator is gcc flags)
+# no-shared: skip .so. no-dso: skip dlopen loadable engines (we don't need
+# them and they complicate static linking). no-zlib: SSL-level compression
+# is deprecated since CRIME (2012); leaving it on pulls inflate/deflate
+# symbols into libcrypto.a and forces every linker downstream to drag in
+# -lz. Squid handles HTTP gzip via its own zlib wiring, so disabling here
+# is functionally a no-op for HEXPLUS.
+RUN case "${TARGETARCH}" in \
+        amd64) OSSL_TARGET=linux-x86_64 ;; \
+        arm64) OSSL_TARGET=linux-aarch64 ;; \
+        arm)   OSSL_TARGET=linux-armv4 ;; \
+        *) echo "unsupported TARGETARCH: ${TARGETARCH}" >&2; exit 1 ;; \
+    esac \
+    && ./Configure "$OSSL_TARGET" \
+        no-shared \
+        no-dso \
+        no-engine \
+        no-asm \
+        no-zlib \
+        --prefix=/opt/ossl10 \
+        --openssldir=/opt/ossl10/ssl \
+        -fPIC
 
 RUN make -j$(nproc) depend && make -j$(nproc) && make install_sw
 
@@ -208,9 +223,11 @@ RUN ls -lh /opt/ldap/lib/libldap*.a /opt/ldap/lib/liblber*.a \
 # redefinition error.
 FROM alpine:${ALPINE_VERSION} AS bdb
 ARG BDB_VERSION
+ARG TARGETARCH
 
 RUN apk add --no-cache \
     build-base \
+    automake \
     curl \
     ca-certificates \
     linux-headers
@@ -227,6 +244,12 @@ WORKDIR /src/bdb-src
 # so it doesn't shadow the gcc builtin.
 RUN sed -i 's/__atomic_compare_exchange\b/__atomic_compare_exchange_db/g' \
         src/dbinc/atomic.h src/mp/mp_fget.c src/mp/mp_mvcc.c src/mp/mp_region.c
+
+WORKDIR /src/bdb-src
+# Same config.guess/sub vintage problem as libecap. Refresh both from
+# Alpine's automake so aarch64 is recognized.
+RUN cp /usr/share/automake-1.16/config.guess dist/ \
+    && cp /usr/share/automake-1.16/config.sub dist/
 
 WORKDIR /src/bdb-src/build_unix
 RUN ../dist/configure \
@@ -258,6 +281,7 @@ RUN ls -lh /opt/bdb/lib/libdb*.a \
 # to a path that 404s.
 FROM alpine:${ALPINE_VERSION} AS ecap
 ARG ECAP_VERSION
+ARG TARGETARCH
 
 RUN apk add --no-cache \
     build-base \
@@ -276,6 +300,12 @@ RUN curl -fL "https://www.e-cap.org/archive/libecap-${ECAP_VERSION}.tar.gz" -o e
     && ln -s libecap-${ECAP_VERSION} ecap-src
 
 WORKDIR /src/ecap-src
+# libecap 0.2.0 (2012) ships config.guess + config.sub from automake 1.11,
+# which predate aarch64 support. Drop in the current Alpine automake
+# versions before configure runs - they recognize aarch64-*-linux-musl
+# correctly and let the regular ./configure path proceed under QEMU.
+RUN cp /usr/share/automake-1.16/config.guess cfgaux/ \
+    && cp /usr/share/automake-1.16/config.sub cfgaux/
 RUN ./configure \
     --prefix=/opt/ecap \
     --enable-static \
@@ -295,6 +325,7 @@ RUN ls -lh /opt/ecap/lib/libecap*.a \
 # added back as their own stages once this baseline compiles.
 FROM alpine:${ALPINE_VERSION} AS squid
 ARG SQUID_VERSION
+ARG TARGETARCH
 
 RUN apk add --no-cache \
     build-base \
@@ -333,6 +364,15 @@ RUN curl -fL "http://www.squid-cache.org/Versions/v3/3.3/squid-${SQUID_VERSION}.
     && ln -s squid-${SQUID_VERSION} squid-src
 
 WORKDIR /src/squid-src
+# Squid 3.3.8's bundled config.guess + config.sub date from 2003 and
+# don't recognize aarch64-linux. Sub-projects (libltdl, helpers/*) ship
+# their own copies, so refresh every config.{guess,sub} under the tree
+# in one sweep before configure runs.
+RUN AUTO_GUESS=/usr/share/automake-1.16/config.guess \
+    && AUTO_SUB=/usr/share/automake-1.16/config.sub \
+    && find . -name config.guess -exec cp "$AUTO_GUESS" {} \; \
+    && find . -name config.sub   -exec cp "$AUTO_SUB"   {} \;
+
 # -fpermissive: gcc 14 rejects several C++03-era idioms (auto_ptr,
 # implicit narrowing conversions, throw() specifiers). The semantics we
 # care about aren't affected; the alternative is patching ~80 source files.
