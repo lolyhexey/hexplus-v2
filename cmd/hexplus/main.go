@@ -24,6 +24,7 @@ import (
 	"github.com/lolyhexey/hexplus/internal/assets"
 	"github.com/lolyhexey/hexplus/internal/extract"
 	"github.com/lolyhexey/hexplus/internal/install"
+	"github.com/lolyhexey/hexplus/internal/pki"
 	"github.com/lolyhexey/hexplus/internal/service"
 	"github.com/lolyhexey/hexplus/internal/version"
 )
@@ -49,6 +50,8 @@ func main() {
 		runService(rest)
 	case "logs":
 		runLogs(rest)
+	case "pki":
+		runPKI(rest)
 	case "help", "-h", "--help":
 		printUsage(os.Stdout)
 	default:
@@ -76,6 +79,8 @@ Subcommands:
   service <verb> [name]  start/stop/restart/enable/disable/status one or all services
                          (services: openvpn, squid, dropbear)
   logs <name>            tail systemd journal for one service (--follow, --tail N)
+  pki init [--force]     generate OpenVPN CA + server cert + ta.key + server.conf
+  pki status             show stored PKI material (subject, expiry)
   extract              dev-only: extract embedded assets to --lib-dir without installing
   version              print version metadata
   help                 this message
@@ -361,6 +366,83 @@ func runLogs(args []string) {
 	if err := service.StreamLogs(svc, service.LogsOptions{Follow: *follow, Tail: *tail}); err != nil {
 		fmt.Fprintln(os.Stderr, "logs:", err)
 		os.Exit(1)
+	}
+}
+
+// runPKI dispatches `hexplus pki <init|status>`.
+func runPKI(args []string) {
+	if len(args) == 0 {
+		fmt.Fprintln(os.Stderr, "usage: hexplus pki <init|status>")
+		os.Exit(2)
+	}
+	switch args[0] {
+	case "init":
+		runPKIInit(args[1:])
+	case "status":
+		runPKIStatus()
+	default:
+		fmt.Fprintf(os.Stderr, "unknown pki verb %q (known: init, status)\n", args[0])
+		os.Exit(2)
+	}
+}
+
+func runPKIInit(args []string) {
+	fs := flag.NewFlagSet("pki init", flag.ExitOnError)
+	force := fs.Bool("force", false, "overwrite an existing PKI (invalidates existing client certs)")
+	caCN := fs.String("ca-cn", "", "Subject CN for the CA cert (default: HEXPLUS CA)")
+	srvCN := fs.String("server-cn", "", "Subject CN for the server cert (default: server)")
+	if err := fs.Parse(args); err != nil {
+		os.Exit(2)
+	}
+
+	res, err := pki.Init(pki.InitOptions{
+		Force:            *force,
+		CACommonName:     *caCN,
+		ServerCommonName: *srvCN,
+	})
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "pki init:", err)
+		os.Exit(1)
+	}
+	fmt.Println("PKI initialized.")
+	for _, p := range res.Written {
+		fmt.Printf("  + %s\n", p)
+	}
+	fmt.Println()
+	fmt.Println("next: 'hexplus service start openvpn' (after enabling on boot if you want it persistent)")
+}
+
+func runPKIStatus() {
+	if !pki.IsInitialized() {
+		fmt.Println("PKI: not initialized.")
+		fmt.Println("run: sudo hexplus pki init")
+		return
+	}
+	fmt.Println("PKI:")
+	for _, p := range []string{
+		pki.OpenVPNDir + "/ca.crt",
+		pki.OpenVPNDir + "/server.crt",
+	} {
+		info, err := pki.InspectCert(p)
+		if err != nil {
+			fmt.Printf("  ! %s: %v\n", p, err)
+			continue
+		}
+		if !info.Present {
+			fmt.Printf("  - %s (missing)\n", p)
+			continue
+		}
+		fmt.Printf("  + %s\n", p)
+		fmt.Printf("      subject:  %s\n", info.Subject)
+		fmt.Printf("      issuer:   %s\n", info.Issuer)
+		fmt.Printf("      not after: %s\n", info.NotAfter)
+	}
+	for _, p := range []string{pki.OpenVPNDir + "/server.key", pki.OpenVPNDir + "/ta.key"} {
+		if st, err := os.Stat(p); err == nil {
+			fmt.Printf("  + %s (mode %s, %d bytes)\n", p, st.Mode(), st.Size())
+		} else {
+			fmt.Printf("  - %s (missing)\n", p)
+		}
 	}
 }
 
