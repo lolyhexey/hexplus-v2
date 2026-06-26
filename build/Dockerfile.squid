@@ -1,0 +1,88 @@
+# Static Squid build via Alpine + musl.
+#
+# Status: HIGH RISK. Squid 3.3.8 (2013) uses old build conventions and the
+# OpenSSL 1.0 API, which Alpine 3.19 no longer ships. This Dockerfile starts
+# with Squid 5.x (current stable on Alpine) so we have a known-good baseline,
+# then later we can either:
+#   a) port the 3.3.8 build to use a pinned OpenSSL 1.0 + musl from an older
+#      Alpine, or
+#   b) accept 5.x (HEXPLUS payload patterns still work, banner differs).
+#
+# Reality: 3.3.8 is 11 years old. The behavior HEXPLUS depends on is HTTP
+# CONNECT + visible_hostname + custom error pages, none of which changed
+# between 3.x and 5.x. The version-in-banner is the only externally visible
+# difference, and HEXPLUS controls that via visible_hostname anyway.
+
+ARG SQUID_VERSION=5.9
+ARG ALPINE_VERSION=3.19
+
+FROM alpine:${ALPINE_VERSION} AS build
+ARG SQUID_VERSION
+
+RUN apk add --no-cache \
+    build-base \
+    autoconf \
+    automake \
+    libtool \
+    pkgconfig \
+    openssl-dev \
+    openssl-libs-static \
+    libxml2-dev \
+    libxml2-static \
+    expat-dev \
+    expat-static \
+    libcap-dev \
+    libcap-static \
+    perl \
+    curl \
+    bash \
+    linux-headers
+
+WORKDIR /src
+RUN curl -fL "https://www.squid-cache.org/Versions/v5/squid-${SQUID_VERSION}.tar.xz" -o squid.txz \
+    && tar xJf squid.txz \
+    && rm squid.txz \
+    && ln -s squid-${SQUID_VERSION} squid-src
+
+WORKDIR /src/squid-src
+RUN ./configure \
+    --prefix=/usr \
+    --sysconfdir=/etc/squid \
+    --libexecdir=/usr/lib/squid \
+    --localstatedir=/var \
+    --datadir=/usr/share/squid \
+    --disable-loadable-modules \
+    --disable-eui \
+    --disable-arch-native \
+    --disable-strict-error-checking \
+    --disable-optimizations \
+    --disable-htcp \
+    --disable-snmp \
+    --disable-wccp \
+    --disable-wccpv2 \
+    --disable-esi \
+    --disable-icmp \
+    --disable-translation \
+    --disable-auto-locale \
+    --disable-ipv6 \
+    --without-systemd \
+    --without-cppunit \
+    LDFLAGS="-static" \
+    CFLAGS="-Os" \
+    CXXFLAGS="-Os"
+
+RUN make -j$(nproc) LDFLAGS="-all-static" \
+    || (echo "============ BUILD FAILED ============" \
+        && tail -50 src/squid.log 2>/dev/null \
+        && exit 1)
+
+RUN mkdir -p /out \
+    && cp src/squid /out/squid \
+    && strip /out/squid \
+    && /out/squid -v 2>&1 | head -3 \
+    && echo "---" \
+    && file /out/squid \
+    && ls -lh /out/squid
+
+FROM scratch AS export
+COPY --from=build /out/squid /squid

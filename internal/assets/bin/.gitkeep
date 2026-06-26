@@ -1,0 +1,2 @@
+# Real static binaries (openvpn, squid, dropbear) land here before the final go build.
+# Phase 0 uses placeholder files so the extract pipeline can be tested end-to-end.

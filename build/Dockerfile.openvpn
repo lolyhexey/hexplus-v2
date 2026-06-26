@@ -1,0 +1,71 @@
+# Static OpenVPN build via Alpine + musl.
+#
+# Output: a fully-static openvpn binary in /out/openvpn for the build-host
+# arch. Cross-arch builds run this image under qemu (handled by build-statics.sh).
+#
+# Why Alpine: ships musl, openssl-libs-static, linux-pam-static, and a clean
+# build env. Avoids the libssl/glibc ABI minefield we hit on Ubuntu jammy.
+#
+# Notes on plugins:
+#   --disable-plugins means openvpn-plugin-auth-pam.so is NOT compiled in.
+#   That's intentional: dlopen()ing .so files from a static binary needs
+#   glibc tricks and would still need the .so on disk. Instead, HEXPLUS v2
+#   wires auth via `auth-user-pass-verify <script> via-file`, which is what
+#   most modern setups use.
+
+ARG OPENVPN_VERSION=2.5.9
+ARG ALPINE_VERSION=3.19
+
+FROM alpine:${ALPINE_VERSION} AS build
+ARG OPENVPN_VERSION
+
+RUN apk add --no-cache \
+    build-base \
+    openssl-dev \
+    openssl-libs-static \
+    lzo-dev \
+    lz4-dev \
+    lz4-static \
+    linux-pam-dev \
+    libcap-ng-dev \
+    libcap-ng-static \
+    iproute2 \
+    autoconf \
+    automake \
+    libtool \
+    pkgconfig \
+    curl \
+    bash
+
+WORKDIR /src
+RUN curl -fL "https://swupdate.openvpn.org/community/releases/openvpn-${OPENVPN_VERSION}.tar.gz" -o openvpn.tgz \
+    && tar xzf openvpn.tgz \
+    && rm openvpn.tgz \
+    && ln -s openvpn-${OPENVPN_VERSION} openvpn-src
+
+WORKDIR /src/openvpn-src
+RUN ./configure \
+    --disable-shared \
+    --enable-static \
+    --disable-plugins \
+    --disable-debug \
+    --disable-pkcs11 \
+    --disable-iproute2 \
+    --enable-small \
+    LDFLAGS="-static" \
+    CFLAGS="-Os -static -fno-asynchronous-unwind-tables"
+
+RUN make -j$(nproc) LDFLAGS="-all-static"
+
+RUN mkdir -p /out \
+    && cp src/openvpn/openvpn /out/openvpn \
+    && strip /out/openvpn \
+    && /out/openvpn --version | head -3 \
+    && echo "---" \
+    && file /out/openvpn \
+    && echo "---" \
+    && ls -lh /out/openvpn
+
+# Final stage: scratch with only the artifact, makes `docker cp` clean.
+FROM scratch AS export
+COPY --from=build /out/openvpn /openvpn

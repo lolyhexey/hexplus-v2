@@ -1,0 +1,48 @@
+# Static Dropbear build via Alpine + musl.
+#
+# Alpine already ships dropbear linked against musl, so this is the easy one.
+# We rebuild it as fully-static (no libc.so.6 dependency) for our embed.
+
+ARG DROPBEAR_VERSION=2024.85
+ARG ALPINE_VERSION=3.19
+
+FROM alpine:${ALPINE_VERSION} AS build
+ARG DROPBEAR_VERSION
+
+RUN apk add --no-cache \
+    build-base \
+    zlib-dev \
+    zlib-static \
+    linux-pam-dev \
+    curl \
+    bash
+
+WORKDIR /src
+RUN curl -fL "https://matt.ucc.asn.au/dropbear/releases/dropbear-${DROPBEAR_VERSION}.tar.bz2" -o dropbear.tbz \
+    && tar xjf dropbear.tbz \
+    && rm dropbear.tbz \
+    && ln -s dropbear-${DROPBEAR_VERSION} dropbear-src
+
+WORKDIR /src/dropbear-src
+RUN ./configure \
+    --disable-zlib=no \
+    --disable-syslog \
+    --enable-static \
+    LDFLAGS="-static" \
+    CFLAGS="-Os -fno-asynchronous-unwind-tables"
+
+# MULTI=1 produces a single dropbearmulti binary that behaves as any of
+# dropbear/dbclient/dropbearkey/dropbearconvert/scp based on argv[0].
+# Saves ~3MB vs building each separately.
+RUN make -j$(nproc) PROGRAMS="dropbear dropbearkey scp" MULTI=1 STATIC=1 LDFLAGS="-static"
+
+RUN mkdir -p /out \
+    && cp dropbearmulti /out/dropbearmulti \
+    && strip /out/dropbearmulti \
+    && /out/dropbearmulti dropbear -V 2>&1 | head -2 \
+    && echo "---" \
+    && file /out/dropbearmulti \
+    && ls -lh /out/dropbearmulti
+
+FROM scratch AS export
+COPY --from=build /out/dropbearmulti /dropbearmulti

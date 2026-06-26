@@ -1,0 +1,23 @@
+# Build artifacts
+/dist/
+/build/cache/
+/build/out/
+hexplus
+hexplus-*
+*.exe
+
+# Bundled binaries (built separately, copied into internal/assets/bin before final build)
+/internal/assets/bin/openvpn
+/internal/assets/bin/squid
+/internal/assets/bin/dropbear
+/internal/assets/bin/*.tar.gz
+
+# Local dev
+.idea/
+.vscode/
+.DS_Store
+*.swp
+
+# Test outputs
+/tmp/
+*.log
