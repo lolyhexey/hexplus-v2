@@ -15,16 +15,20 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"os"
+	"os/signal"
 	"runtime"
 	"strings"
+	"syscall"
 
 	"github.com/lolyhexey/hexplus/internal/assets"
 	"github.com/lolyhexey/hexplus/internal/extract"
 	"github.com/lolyhexey/hexplus/internal/install"
 	"github.com/lolyhexey/hexplus/internal/pki"
+	"github.com/lolyhexey/hexplus/internal/proxy"
 	"github.com/lolyhexey/hexplus/internal/service"
 	"github.com/lolyhexey/hexplus/internal/user"
 	"github.com/lolyhexey/hexplus/internal/version"
@@ -55,6 +59,8 @@ func main() {
 		runPKI(rest)
 	case "user":
 		runUser(rest)
+	case "proxy":
+		runProxy(rest)
 	case "help", "-h", "--help":
 		printUsage(os.Stdout)
 	default:
@@ -88,6 +94,10 @@ Subcommands:
   user list              list HEXPLUS users with their metadata
   user remove <name>     delete a user (system + cert + db row)
   user export <name>     re-emit the user's .ovpn file
+  proxy add <name>       register a Go-native HTTP CONNECT proxy + systemd unit
+  proxy list             show configured proxies
+  proxy remove <name>    drop a proxy's config row + systemd unit
+  proxy run <name>       foreground server (invoked by systemd)
   extract              dev-only: extract embedded assets to --lib-dir without installing
   version              print version metadata
   help                 this message
@@ -617,6 +627,214 @@ func defaultRemoteHost() string {
 		}
 	}
 	return "127.0.0.1"
+}
+
+// runProxy dispatches `hexplus proxy <add|list|remove|run>`.
+func runProxy(args []string) {
+	if len(args) == 0 {
+		fmt.Fprintln(os.Stderr, "usage: hexplus proxy <add|list|remove|run> [...]")
+		os.Exit(2)
+	}
+	switch args[0] {
+	case "add":
+		runProxyAdd(args[1:])
+	case "list":
+		runProxyList()
+	case "remove", "delete", "rm":
+		runProxyRemove(args[1:])
+	case "run":
+		runProxyRun(args[1:])
+	default:
+		fmt.Fprintf(os.Stderr, "unknown proxy verb %q\n", args[0])
+		os.Exit(2)
+	}
+}
+
+// proxyPresets are the response shapes the v1 conexao menu offered.
+// Picking a preset just fills the StatusCode + StatusMsg defaults.
+var proxyPresets = map[string]struct {
+	code string
+	msg  string
+}{
+	"101": {"101", `<font color="null">HEXPLUS</font>`},
+	"200": {"200", `Connection established\r\nContent-length: 0`},
+	"400": {"400", `<font color="null">HEXPLUS</font>\r\nContent-length: 0`},
+	"520": {"520", `<font color="null">HEXPLUS</font>\r\nContent-length: 0`},
+}
+
+func runProxyAdd(args []string) {
+	fs := flag.NewFlagSet("proxy add", flag.ExitOnError)
+	port := fs.Int("port", 0, "TCP port to listen on (required)")
+	target := fs.String("target", "127.0.0.1:22", "default upstream when X-Real-Host is absent (host:port)")
+	preset := fs.String("preset", "101", "status preset: 101 (WebSocket spoof, default), 200, 400, 520")
+	code := fs.String("status-code", "", "override status code (digits only)")
+	msg := fs.String("status-msg", "", `override status message (literal \r\n becomes CRLF)`)
+	if err := fs.Parse(args); err != nil {
+		os.Exit(2)
+	}
+	rest := fs.Args()
+	if len(rest) == 0 {
+		fmt.Fprintln(os.Stderr, "usage: hexplus proxy add --port=N [--target host:port] [--preset 101|200|400|520] <name>")
+		os.Exit(2)
+	}
+	name := rest[0]
+	if err := proxy.ValidateName(name); err != nil {
+		fmt.Fprintln(os.Stderr, "proxy add:", err)
+		os.Exit(2)
+	}
+	if *port <= 0 || *port > 65535 {
+		fmt.Fprintln(os.Stderr, "proxy add: --port is required (1-65535)")
+		os.Exit(2)
+	}
+
+	chosenCode := *code
+	chosenMsg := *msg
+	if chosenCode == "" || chosenMsg == "" {
+		p, ok := proxyPresets[*preset]
+		if !ok {
+			fmt.Fprintf(os.Stderr, "unknown --preset %q (try: 101 200 400 520)\n", *preset)
+			os.Exit(2)
+		}
+		if chosenCode == "" {
+			chosenCode = p.code
+		}
+		if chosenMsg == "" {
+			chosenMsg = p.msg
+		}
+	}
+
+	cfg := proxy.Config{
+		Name:        name,
+		Port:        *port,
+		DefaultHost: *target,
+		StatusCode:  chosenCode,
+		StatusMsg:   chosenMsg,
+	}
+	// Validate by trying to construct a Handler now - catches port
+	// range, etc. before we touch disk.
+	if _, err := proxy.NewHandler(cfg); err != nil {
+		fmt.Fprintln(os.Stderr, "proxy add:", err)
+		os.Exit(1)
+	}
+
+	if os.Geteuid() != 0 {
+		fmt.Fprintln(os.Stderr, "proxy add requires root (writes /var/lib/hexplus and /etc/systemd/system)")
+		os.Exit(1)
+	}
+	db, err := proxy.Load()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "proxy add:", err)
+		os.Exit(1)
+	}
+	db.Proxies[name] = cfg
+	if err := db.Save(); err != nil {
+		fmt.Fprintln(os.Stderr, "proxy add:", err)
+		os.Exit(1)
+	}
+	unitPath, written, reloadErr, err := proxy.WriteUnit(cfg)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "proxy add (unit):", err)
+		os.Exit(1)
+	}
+	fmt.Printf("proxy %s registered.\n", cfg.Name)
+	fmt.Printf("  config: %s\n", proxy.DBPath)
+	if written {
+		fmt.Printf("  unit:   %s\n", unitPath)
+	} else {
+		fmt.Printf("  unit:   %s (already up-to-date)\n", unitPath)
+	}
+	if reloadErr != nil {
+		fmt.Printf("  warning: systemctl daemon-reload: %v\n", reloadErr)
+	}
+	fmt.Println()
+	fmt.Printf("next: systemctl enable --now %s\n", cfg.UnitName())
+}
+
+func runProxyList() {
+	db, err := proxy.Load()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "proxy list:", err)
+		os.Exit(1)
+	}
+	all := db.All()
+	if len(all) == 0 {
+		fmt.Println("no proxies configured.")
+		return
+	}
+	fmt.Printf("%-12s  %-6s  %-22s  %-5s  %s\n", "NAME", "PORT", "DEFAULT_HOST", "CODE", "STATUS_MSG")
+	for _, c := range all {
+		msg := c.StatusMsg
+		if len(msg) > 60 {
+			msg = msg[:57] + "..."
+		}
+		fmt.Printf("%-12s  %-6d  %-22s  %-5s  %s\n", c.Name, c.Port, c.DefaultHost, c.StatusCode, msg)
+	}
+}
+
+func runProxyRemove(args []string) {
+	if len(args) == 0 {
+		fmt.Fprintln(os.Stderr, "usage: hexplus proxy remove <name>")
+		os.Exit(2)
+	}
+	name := args[0]
+	db, err := proxy.Load()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "proxy remove:", err)
+		os.Exit(1)
+	}
+	cfg, ok := db.Proxies[name]
+	if !ok {
+		fmt.Fprintf(os.Stderr, "no proxy named %q\n", name)
+		os.Exit(1)
+	}
+	delete(db.Proxies, name)
+	if err := db.Save(); err != nil {
+		fmt.Fprintln(os.Stderr, "proxy remove:", err)
+		os.Exit(1)
+	}
+	unitPath, removed, reloadErr, err := proxy.RemoveUnit(cfg)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "proxy remove (unit):", err)
+		os.Exit(1)
+	}
+	fmt.Printf("proxy %s removed.\n", cfg.Name)
+	if removed {
+		fmt.Printf("  unit: %s removed\n", unitPath)
+	} else {
+		fmt.Printf("  unit: %s (already gone)\n", unitPath)
+	}
+	if reloadErr != nil {
+		fmt.Printf("  warning: systemctl daemon-reload: %v\n", reloadErr)
+	}
+}
+
+func runProxyRun(args []string) {
+	if len(args) == 0 {
+		fmt.Fprintln(os.Stderr, "usage: hexplus proxy run <name>")
+		os.Exit(2)
+	}
+	name := args[0]
+	db, err := proxy.Load()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "proxy run:", err)
+		os.Exit(1)
+	}
+	cfg, ok := db.Proxies[name]
+	if !ok {
+		fmt.Fprintf(os.Stderr, "no proxy named %q\n", name)
+		os.Exit(1)
+	}
+	h, err := proxy.NewHandler(cfg)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "proxy run:", err)
+		os.Exit(1)
+	}
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer cancel()
+	if err := h.Serve(ctx); err != nil {
+		fmt.Fprintln(os.Stderr, "proxy run:", err)
+		os.Exit(1)
+	}
 }
 
 func runExtract(args []string) {
