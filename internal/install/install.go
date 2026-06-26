@@ -28,22 +28,30 @@ import (
 
 	"github.com/lolyhexey/hexplus/internal/assets"
 	"github.com/lolyhexey/hexplus/internal/extract"
+	"github.com/lolyhexey/hexplus/internal/paths"
+	"github.com/lolyhexey/hexplus/internal/service"
 )
 
+// Re-export the legacy names so callers that already use install.LibDir etc.
+// keep compiling while we migrate them to the paths package directly.
 const (
-	BinDir     = "/usr/local/bin"
-	LibDir     = "/usr/local/lib/hexplus"
-	StateDir   = "/var/lib/hexplus"
-	MarkerFile = "/var/lib/hexplus/installed"
-	SelfPath   = "/usr/local/bin/hexplus"
+	BinDir     = paths.BinDir
+	LibDir     = paths.LibDir
+	StateDir   = paths.StateDir
+	MarkerFile = paths.MarkerFile
+	SelfPath   = paths.SelfPath
 )
 
 // Result is what Install reports back to the CLI for human consumption.
 type Result struct {
-	BinariesWritten []string
-	BinariesSkipped []string
-	SelfCopied      bool
-	MarkerWritten   bool
+	BinariesWritten    []string
+	BinariesSkipped    []string
+	SymlinksCreated    []string
+	UnitsWritten       []string
+	UnitsSkipped       []string
+	UnitsReloadWarning error // non-fatal; surfaced in the CLI output
+	SelfCopied         bool
+	MarkerWritten      bool
 }
 
 // IsInstalled returns true if the install marker exists. Cheap check used
@@ -76,6 +84,31 @@ func Install() (Result, error) {
 	res.BinariesWritten = exres.Written
 	res.BinariesSkipped = exres.Skipped
 
+	// dropbearmulti dispatches on argv[0]; systemd ExecStart picks up the
+	// basename of the binary path. Symlink dropbear / dropbearkey / scp
+	// against the multi binary so the matching subcommand runs.
+	if err := service.CreateDropbearSymlinks(); err != nil {
+		return res, fmt.Errorf("symlink dropbear helpers: %w", err)
+	}
+	res.SymlinksCreated = []string{
+		LibDir + "/dropbear",
+		LibDir + "/dropbearkey",
+		LibDir + "/scp",
+	}
+
+	// systemd units. Best-effort on non-systemd boxes: write the files,
+	// skip daemon-reload if systemctl isn't there. The Install itself
+	// still succeeds so the binaries are usable manually.
+	if service.SystemdAvailable() {
+		wr, err := service.WriteUnits()
+		if err != nil {
+			return res, fmt.Errorf("write systemd units: %w", err)
+		}
+		res.UnitsWritten = wr.Written
+		res.UnitsSkipped = wr.Skipped
+		res.UnitsReloadWarning = wr.ReloadWarning
+	}
+
 	if err := installSelf(); err != nil {
 		return res, fmt.Errorf("install self: %w", err)
 	}
@@ -96,6 +129,13 @@ func Install() (Result, error) {
 func Uninstall() error {
 	if os.Geteuid() != 0 {
 		return errors.New("uninstall requires root; rerun under sudo")
+	}
+
+	// systemd units first - if anything is currently running off them, we
+	// want systemd to forget the unit before the binary disappears so a
+	// stopped service doesn't keep referencing a deleted path.
+	if _, err := service.RemoveUnits(); err != nil {
+		return fmt.Errorf("remove systemd units: %w", err)
 	}
 
 	// Self copy first so a partial uninstall still leaves the cwd binary

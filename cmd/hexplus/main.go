@@ -102,11 +102,33 @@ func runInstall() {
 	for _, p := range res.BinariesSkipped {
 		fmt.Printf("  = %s (already up-to-date)\n", p)
 	}
+	for _, p := range res.SymlinksCreated {
+		fmt.Printf("  + %s -> dropbearmulti\n", p)
+	}
+	for _, p := range res.UnitsWritten {
+		fmt.Printf("  + %s\n", p)
+	}
+	for _, p := range res.UnitsSkipped {
+		fmt.Printf("  = %s (already up-to-date)\n", p)
+	}
 	if res.SelfCopied {
 		fmt.Printf("  + %s\n", install.SelfPath)
 	}
 	if res.MarkerWritten {
 		fmt.Printf("  + %s\n", install.MarkerFile)
+	}
+	fmt.Println()
+	if len(res.UnitsWritten) == 0 && len(res.UnitsSkipped) == 0 {
+		fmt.Println("note: systemd not detected; unit files were skipped.")
+		fmt.Println("      binaries under " + install.LibDir + " can be run manually.")
+	} else {
+		if res.UnitsReloadWarning != nil {
+			fmt.Printf("warning: systemctl daemon-reload failed: %v\n", res.UnitsReloadWarning)
+			fmt.Println("         units are on disk; reload manually after booting into systemd.")
+			fmt.Println()
+		}
+		fmt.Println("next: enable services to start on boot, e.g.")
+		fmt.Println("      systemctl enable --now hexplus-openvpn")
 	}
 }
 
