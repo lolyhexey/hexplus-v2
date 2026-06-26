@@ -36,15 +36,24 @@ RUN apk add --no-cache \
     perl \
     curl \
     bash \
-    linux-headers
+    ca-certificates \
+    linux-headers \
+    && update-ca-certificates
 
 WORKDIR /src
-RUN curl -fL "https://www.squid-cache.org/Versions/v5/squid-${SQUID_VERSION}.tar.xz" -o squid.txz \
-    && tar xJf squid.txz \
-    && rm squid.txz \
-    && ln -s squid-${SQUID_VERSION} squid-src
+# Pull from GitHub mirror; squid-cache.org's TLS cert chain trips Alpine's
+# bundled CA store, which we don't want to disable wholesale.
+# Tag scheme is SQUID_<MAJOR>_<MINOR>, eg SQUID_5_9.
+RUN _tag="SQUID_$(echo ${SQUID_VERSION} | tr '.' '_')" \
+    && curl -fL "https://github.com/squid-cache/squid/archive/refs/tags/${_tag}.tar.gz" -o squid.tgz \
+    && tar xzf squid.tgz \
+    && rm squid.tgz \
+    && ln -s squid-${_tag} squid-src
 
 WORKDIR /src/squid-src
+# GitHub source archive ships raw source: configure script isn't pre-generated,
+# so bootstrap it first via autotools. The official tarball would skip this step.
+RUN ./bootstrap.sh
 RUN ./configure \
     --prefix=/usr \
     --sysconfdir=/etc/squid \
