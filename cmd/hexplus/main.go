@@ -26,6 +26,7 @@ import (
 	"github.com/lolyhexey/hexplus/internal/install"
 	"github.com/lolyhexey/hexplus/internal/pki"
 	"github.com/lolyhexey/hexplus/internal/service"
+	"github.com/lolyhexey/hexplus/internal/user"
 	"github.com/lolyhexey/hexplus/internal/version"
 )
 
@@ -52,6 +53,8 @@ func main() {
 		runLogs(rest)
 	case "pki":
 		runPKI(rest)
+	case "user":
+		runUser(rest)
 	case "help", "-h", "--help":
 		printUsage(os.Stdout)
 	default:
@@ -81,6 +84,10 @@ Subcommands:
   logs <name>            tail systemd journal for one service (--follow, --tail N)
   pki init [--force]     generate OpenVPN CA + server cert + ta.key + server.conf
   pki status             show stored PKI material (subject, expiry)
+  user add <name>        create a HEXPLUS account (system user + OpenVPN client cert)
+  user list              list HEXPLUS users with their metadata
+  user remove <name>     delete a user (system + cert + db row)
+  user export <name>     re-emit the user's .ovpn file
   extract              dev-only: extract embedded assets to --lib-dir without installing
   version              print version metadata
   help                 this message
@@ -444,6 +451,172 @@ func runPKIStatus() {
 			fmt.Printf("  - %s (missing)\n", p)
 		}
 	}
+}
+
+// runUser dispatches `hexplus user <add|list|remove|export>`.
+func runUser(args []string) {
+	if len(args) == 0 {
+		fmt.Fprintln(os.Stderr, "usage: hexplus user <add|list|remove|export> [...]")
+		os.Exit(2)
+	}
+	switch args[0] {
+	case "add":
+		runUserAdd(args[1:])
+	case "list":
+		runUserList()
+	case "remove", "delete", "rm":
+		runUserRemove(args[1:])
+	case "export":
+		runUserExport(args[1:])
+	default:
+		fmt.Fprintf(os.Stderr, "unknown user verb %q\n", args[0])
+		os.Exit(2)
+	}
+}
+
+func runUserAdd(args []string) {
+	fs := flag.NewFlagSet("user add", flag.ExitOnError)
+	pw := fs.String("password", "", "user password (required)")
+	expDays := fs.Int("expire-days", 0, "days until the account expires (0 = no expiry)")
+	limit := fs.Int("limit", 0, "max concurrent connections (0 = no enforced cap)")
+	remoteHost := fs.String("remote", "", "OpenVPN server's public address for the .ovpn (defaults to /etc/IP if present, else 127.0.0.1)")
+	remotePort := fs.Int("remote-port", 1194, "OpenVPN server port for the .ovpn")
+	proto := fs.String("proto", "udp", "OpenVPN proto (udp|tcp)")
+	outFile := fs.String("out", "", "write the .ovpn to this path (default: /root/<name>.ovpn)")
+	if err := fs.Parse(args); err != nil {
+		os.Exit(2)
+	}
+	rest := fs.Args()
+	if len(rest) == 0 {
+		fmt.Fprintln(os.Stderr, "usage: hexplus user add <name> --password <pw> [--expire-days N] [--limit N]")
+		os.Exit(2)
+	}
+	name := rest[0]
+	if *remoteHost == "" {
+		*remoteHost = defaultRemoteHost()
+	}
+	res, err := user.Add(
+		user.AddInput{
+			Name:          name,
+			Password:      *pw,
+			ExpiresInDays: *expDays,
+			Limit:         *limit,
+		},
+		user.OVPNInput{
+			RemoteHost: *remoteHost,
+			RemotePort: *remotePort,
+			Proto:      *proto,
+		},
+	)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "user add:", err)
+		os.Exit(1)
+	}
+	dest := *outFile
+	if dest == "" {
+		dest = "/root/" + name + ".ovpn"
+	}
+	if err := os.WriteFile(dest, res.OVPN, 0o600); err != nil {
+		fmt.Fprintln(os.Stderr, "write ovpn:", err)
+		os.Exit(1)
+	}
+	fmt.Printf("user %s created.\n", res.Record.Name)
+	fmt.Printf("  ovpn config: %s\n", dest)
+	if !res.Record.ExpiresAt.IsZero() {
+		fmt.Printf("  expires:     %s\n", res.Record.ExpiresAt.Format("2006-01-02"))
+	}
+	if res.Record.Limit > 0 {
+		fmt.Printf("  limit:       %d concurrent connections\n", res.Record.Limit)
+	}
+}
+
+func runUserList() {
+	all, err := user.List()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "user list:", err)
+		os.Exit(1)
+	}
+	if len(all) == 0 {
+		fmt.Println("no HEXPLUS users.")
+		return
+	}
+	fmt.Printf("%-16s  %-12s  %-12s  %s\n", "NAME", "CREATED", "EXPIRES", "LIMIT")
+	for _, r := range all {
+		exp := "(none)"
+		if !r.ExpiresAt.IsZero() {
+			exp = r.ExpiresAt.Format("2006-01-02")
+		}
+		limit := "-"
+		if r.Limit > 0 {
+			limit = fmt.Sprintf("%d", r.Limit)
+		}
+		fmt.Printf("%-16s  %-12s  %-12s  %s\n",
+			r.Name, r.CreatedAt.Format("2006-01-02"), exp, limit)
+	}
+}
+
+func runUserRemove(args []string) {
+	if len(args) == 0 {
+		fmt.Fprintln(os.Stderr, "usage: hexplus user remove <name>")
+		os.Exit(2)
+	}
+	name := args[0]
+	if err := user.Remove(name); err != nil {
+		fmt.Fprintln(os.Stderr, "user remove:", err)
+		os.Exit(1)
+	}
+	fmt.Printf("user %s removed.\n", name)
+}
+
+func runUserExport(args []string) {
+	fs := flag.NewFlagSet("user export", flag.ExitOnError)
+	remoteHost := fs.String("remote", "", "OpenVPN server's public address (defaults like 'user add')")
+	remotePort := fs.Int("remote-port", 1194, "OpenVPN server port")
+	proto := fs.String("proto", "udp", "OpenVPN proto (udp|tcp)")
+	outFile := fs.String("out", "", "write to this path (default: stdout)")
+	if err := fs.Parse(args); err != nil {
+		os.Exit(2)
+	}
+	rest := fs.Args()
+	if len(rest) == 0 {
+		fmt.Fprintln(os.Stderr, "usage: hexplus user export <name> [--remote host] [--out path]")
+		os.Exit(2)
+	}
+	name := rest[0]
+	if *remoteHost == "" {
+		*remoteHost = defaultRemoteHost()
+	}
+	ovpn, err := user.Export(name, user.OVPNInput{
+		RemoteHost: *remoteHost,
+		RemotePort: *remotePort,
+		Proto:      *proto,
+	})
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "user export:", err)
+		os.Exit(1)
+	}
+	if *outFile == "" {
+		os.Stdout.Write(ovpn)
+		return
+	}
+	if err := os.WriteFile(*outFile, ovpn, 0o600); err != nil {
+		fmt.Fprintln(os.Stderr, "write ovpn:", err)
+		os.Exit(1)
+	}
+	fmt.Printf("wrote %s\n", *outFile)
+}
+
+// defaultRemoteHost reads /etc/IP if HEXPLUS v1 wrote it (still set up
+// by `Install/list`), otherwise falls back to 127.0.0.1. The caller can
+// always override via --remote.
+func defaultRemoteHost() string {
+	if data, err := os.ReadFile("/etc/IP"); err == nil {
+		ip := strings.TrimSpace(string(data))
+		if ip != "" {
+			return ip
+		}
+	}
+	return "127.0.0.1"
 }
 
 func runExtract(args []string) {
