@@ -2,8 +2,9 @@
 /dist/
 /build/cache/
 /build/out/
-hexplus
-hexplus-*
+# Anchored to repo root: ignore the produced binary, not the cmd/hexplus/ source dir
+/hexplus
+/hexplus-*
 *.exe
 
 # Bundled binaries (built separately, copied into internal/assets/bin before final build)
