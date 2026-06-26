@@ -509,7 +509,7 @@ func runChangeLimit(r *bufio.Reader) error {
 		return nil
 	}
 
-	limStr, err := readLine(r, fmt.Sprintf("SELECT CONNECTION FOR USER? %s:", rec.Name))
+	limStr, err := readLine(r, fmt.Sprintf("จำนวนการเชื่อมต่อพร้อมกันของผู้ใช้ %s:", rec.Name))
 	if err != nil {
 		return err
 	}
@@ -545,7 +545,7 @@ func runChangePassword(r *bufio.Reader) error {
 		return nil
 	}
 
-	pw, err := readLine(r, fmt.Sprintf("PASSWORD FOR USER %s:", rec.Name))
+	pw, err := readLine(r, fmt.Sprintf("รหัสผ่านใหม่สำหรับผู้ใช้ %s:", rec.Name))
 	if err != nil {
 		return err
 	}

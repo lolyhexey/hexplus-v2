@@ -16,8 +16,10 @@ package menu
 import (
 	"bufio"
 	"fmt"
+	"os/exec"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/lolyhexey/hexplus/internal/proxy"
 	"github.com/lolyhexey/hexplus/internal/service"
@@ -238,21 +240,56 @@ func proxyAdd(r *bufio.Reader) error {
 	if err != nil {
 		return err
 	}
-
-	fmt.Println()
-	fmt.Println(cGrnBold + "เพิ่ม Proxy " + cWhtBold + name + cGrnBold + " สำเร็จ!" + cReset)
-	fmt.Println(cGrnBold + "  config: " + cWhtBold + proxy.DBPath + cReset)
-	if written {
-		fmt.Println(cGrnBold + "  unit:   " + cWhtBold + unitPath + cReset)
-	} else {
-		fmt.Println(cGrnBold + "  unit:   " + cWhtBold + unitPath + cYelBold + " (ไม่มีการเปลี่ยนแปลง)" + cReset)
-	}
 	if reloadErr != nil {
 		fmt.Println(cYelBold + "  คำเตือน: systemctl daemon-reload: " + reloadErr.Error() + cReset)
 	}
+
+	// v1 conexao (lines 1564-1579) starts the SOCKS proxy immediately and
+	// verifies via netstat. Replicate that with systemctl enable --now +
+	// /proc/net/tcp poll so the operator sees the same "เปิดใช้งาน SOCKS
+	// สำเร็จแล้ว" success / red-error wording as in v1.
+	unitName := cfg.UnitName()
+	if enableErr := systemctlRun("enable", "--now", unitName); enableErr != nil {
+		fmt.Println()
+		fmt.Println(cRedBold + "[ผิดพลาด]" + cYelBold +
+			" PROXY SOCKS เริ่มทำงานไม่สำเร็จ: systemctl enable --now " +
+			unitName + ": " + enableErr.Error() + cReset)
+		_ = written // keep ref so go vet doesn't complain
+		_ = unitPath
+		return nil
+	}
+	// systemd 'started' the service but the listener doesn't bind
+	// instantly on slower boxes; sleep briefly then check.
+	time.Sleep(700 * time.Millisecond)
+	listening, _ := service.ListenStatus(cfg.Port, "tcp")
 	fmt.Println()
-	fmt.Printf("%sเริ่มใช้งาน: %ssystemctl enable --now %s%s\n",
-		cWhtBold, cCyanBold, cfg.UnitName(), cReset)
+	if listening {
+		fmt.Println(cGrnBold + "เปิดใช้งาน SOCKS สำเร็จแล้ว" + cReset)
+		fmt.Printf("%sพอร์ต %s%d%s กำลังฟัง%s\n", cGrnBold, cCyanBold, cfg.Port, cGrnBold, cReset)
+	} else {
+		fmt.Println(cRedBold + "[ผิดพลาด]" + cYelBold +
+			" PROXY SOCKS เริ่มทำงานไม่สำเร็จบนพอร์ต " +
+			strconv.Itoa(cfg.Port) +
+			": ไม่พบ socket ใน LISTEN — ตรวจสอบ journalctl -u " + unitName + cReset)
+	}
+	return nil
+}
+
+// systemctlRun is a thin shell-out for systemctl <verb> <args...>. Lives
+// here rather than in service/ because we want to avoid an import cycle
+// (service already imports menu? no — it does not — but we keep this
+// local to keep the proxies code self-contained). Errors include the
+// combined stderr so the menu surfaces useful diagnostics.
+func systemctlRun(args ...string) error {
+	cmd := exec.Command("systemctl", args...)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		msg := strings.TrimSpace(string(out))
+		if msg == "" {
+			return err
+		}
+		return fmt.Errorf("%w: %s", err, msg)
+	}
 	return nil
 }
 

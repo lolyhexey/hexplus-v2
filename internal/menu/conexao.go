@@ -20,6 +20,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"strconv"
+	"strings"
+	"time"
 
 	"github.com/lolyhexey/hexplus/internal/service"
 )
@@ -160,6 +162,36 @@ func serviceMenu(r *bufio.Reader, name string) error {
 			}
 			for _, p := range res.ConfigsWritten {
 				fmt.Println("  + " + p)
+			}
+
+			// Match HEXPLUS v1 conexao: after install, ask whether to start
+			// immediately + verify with a port-listening check. Default Y
+			// because v1's apt-install path used to leave services
+			// auto-started and customers expect "install → working".
+			fmt.Print("\n" + cGrnBold + "เริ่มใช้งานเลยไหม? [Y/n]: " + cReset)
+			line, _ := r.ReadString('\n')
+			ans := strings.TrimSpace(line)
+			startNow := ans == "" || strings.HasPrefix(strings.ToLower(ans), "y")
+			if startNow {
+				if enErr := service.Enable(svc); enErr != nil {
+					fmt.Println(cYelBold + "คำเตือน: เปิด autostart ไม่สำเร็จ: " + enErr.Error() + cReset)
+				}
+				if stErr := service.Start(svc); stErr != nil {
+					fmt.Println(cRedBold + "[ผิดพลาด]" + cYelBold +
+						" เริ่ม " + svc.Name + " ไม่สำเร็จ: " + stErr.Error() +
+						" — ตรวจสอบ journalctl -u " + svc.UnitName + cReset)
+				} else {
+					time.Sleep(700 * time.Millisecond)
+					listening, _ := service.ListenStatus(svc.Port, svc.PortProto)
+					if listening {
+						fmt.Println(cGrnBold + "เปิดใช้งาน " + svc.Name + " สำเร็จแล้ว — พอร์ต " +
+							strconv.Itoa(svc.Port) + cReset)
+					} else {
+						fmt.Println(cRedBold + "[ผิดพลาด]" + cYelBold +
+							" " + svc.Name + " เริ่มทำงานแต่ไม่พบ socket ที่พอร์ต " +
+							strconv.Itoa(svc.Port) + " — ตรวจสอบ journalctl -u " + svc.UnitName + cReset)
+					}
+				}
 			}
 			waitEnter(r)
 		case "2": // start

@@ -84,6 +84,17 @@ func paintMainMenu() error {
 	// dropped in v2.2 (user feedback — see memory:feedback-dropped-features),
 	// so the right column compacts to 8 surviving entries. Numeric IDs match
 	// the dispatchMain switch below 1:1.
+
+	// Read the limiter marker from disk so the indicator matches reality
+	// (the same file sys.go's runLimiter toggles).
+	limiterMark := cRedBold + "○" + cReset
+	if _, statErr := os.Stat("/etc/security/limits.d/hexplus.conf"); statErr == nil {
+		limiterMark = cGrnBold + "◉" + cReset
+	}
+	// v1 paints ">>>" with inter-character color gradient
+	// (Modulos/menu line 392-393: red ">", yellow ">", green ">").
+	arrow := cRedBold + ">" + cYelBold + ">" + cGrnBold + ">" + cReset
+
 	grid := []struct {
 		leftIdx, leftLabel   string
 		rightIdx, rightLabel string
@@ -92,9 +103,9 @@ func paintMainMenu() error {
 		{"02", "สร้างบัญชี ผุ้ใช้ทดลอง", "12", "กราฟเเสดงความเร็วเน็ต"},
 		{"03", "ลบชื่อ ผู้ใช้", "13", "เพิ่มประสิทธิภาพ"},
 		{"04", "เช็คผู้ใช้ ออนไลน์", "14", "BACKUP"},
-		{"05", "เปลี่ยนวันหมดอายุ ผู้ใช้", "15", "จำกัดการเชื่อมต่อ ○"},
-		{"06", "เปลี่ยนจำกัด การเชื่อมต่อ", "16", "ข้อมูล VPS >>>"},
-		{"07", "เปลี่ยนรหัสผ่าน ผู้ใช้", "17", "หน้าถัดไป >>>"},
+		{"05", "เปลี่ยนวันหมดอายุ ผู้ใช้", "15", "จำกัดการเชื่อมต่อ " + limiterMark},
+		{"06", "เปลี่ยนจำกัด การเชื่อมต่อ", "16", "ข้อมูล VPS " + arrow},
+		{"07", "เปลี่ยนรหัสผ่าน ผู้ใช้", "17", "หน้าถัดไป " + arrow},
 		{"08", "ลบผู้ใช้ที่ หมดอายุ", "", ""},
 		{"09", "เช็คบัญชีทั้งหมด", "", ""},
 		{"10", "โหมดฟังชั่น", "", ""},
