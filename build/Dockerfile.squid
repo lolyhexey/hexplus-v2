@@ -32,6 +32,8 @@ ARG OPENSSL_VERSION=1.0.2u
 ARG SQUID_VERSION=3.3.8
 ARG PAM_VERSION=1.5.3
 ARG LDAP_VERSION=2.4.59
+ARG BDB_VERSION=5.3.28
+ARG ECAP_VERSION=0.2.0
 
 # =====================================================================
 # STAGE openssl: OpenSSL 1.0.2u static
@@ -192,6 +194,100 @@ RUN ls -lh /opt/ldap/lib/libldap*.a /opt/ldap/lib/liblber*.a \
     && file /opt/ldap/lib/libldap.a
 
 # =====================================================================
+# STAGE bdb: Berkeley DB 5.3.28 static
+# =====================================================================
+# 5.3.28 is the last BDB release under the Sleepycat license (BSD-style),
+# distinct from BDB 6+ which Oracle relicensed to AGPL. Squid 3.3.8
+# wants 4.x or 5.x for basic_db_auth and ext_session_acl; 5.3.28 is
+# the practical sweet spot - modern enough to build on gcc 14 with
+# small patches, old enough to avoid the AGPL grenade.
+#
+# BDB uses an out-of-tree build under build_unix/. The atomic.h file
+# has a __atomic_compare_exchange call that collides with gcc 11+
+# builtins; sed-patch the symbol to a unique name to avoid the
+# redefinition error.
+FROM alpine:${ALPINE_VERSION} AS bdb
+ARG BDB_VERSION
+
+RUN apk add --no-cache \
+    build-base \
+    curl \
+    ca-certificates \
+    linux-headers
+
+WORKDIR /src
+RUN curl -fL "https://download.oracle.com/berkeley-db/db-${BDB_VERSION}.tar.gz" -o bdb.tgz \
+    && tar xzf bdb.tgz \
+    && rm bdb.tgz \
+    && ln -s db-${BDB_VERSION} bdb-src
+
+WORKDIR /src/bdb-src
+# Patch atomic_compare_exchange symbol collision with modern gcc.
+# Reference: Gentoo/Alpine BDB patches; renames the BDB internal helper
+# so it doesn't shadow the gcc builtin.
+RUN sed -i 's/__atomic_compare_exchange\b/__atomic_compare_exchange_db/g' \
+        src/dbinc/atomic.h src/mp/mp_fget.c src/mp/mp_mvcc.c src/mp/mp_region.c
+
+WORKDIR /src/bdb-src/build_unix
+RUN ../dist/configure \
+    --prefix=/opt/bdb \
+    --enable-static \
+    --disable-shared \
+    --disable-cxx \
+    --disable-stl \
+    --disable-debug \
+    --disable-replication \
+    --disable-cryptography \
+    --disable-dump185 \
+    --disable-tcl \
+    --disable-test \
+    CFLAGS="-Os -fPIC"
+
+RUN make -j$(nproc) && make install
+
+RUN ls -lh /opt/bdb/lib/libdb*.a \
+    && file /opt/bdb/lib/libdb.a
+
+# =====================================================================
+# STAGE ecap: libecap 1.0.1 static
+# =====================================================================
+# eCAP = Squid's message-adaptation API; lets external modules rewrite
+# requests/responses. libecap is the headers + glue layer. Squid 3.3.8
+# wants the 1.0.x line; 1.0.1 is the contemporary release.
+# Hosted at e-cap.org now; the old measurement-factory.com URL 302s
+# to a path that 404s.
+FROM alpine:${ALPINE_VERSION} AS ecap
+ARG ECAP_VERSION
+
+RUN apk add --no-cache \
+    build-base \
+    autoconf \
+    automake \
+    libtool \
+    pkgconfig \
+    curl \
+    ca-certificates \
+    linux-headers
+
+WORKDIR /src
+RUN curl -fL "https://www.e-cap.org/archive/libecap-${ECAP_VERSION}.tar.gz" -o ecap.tgz \
+    && tar xzf ecap.tgz \
+    && rm ecap.tgz \
+    && ln -s libecap-${ECAP_VERSION} ecap-src
+
+WORKDIR /src/ecap-src
+RUN ./configure \
+    --prefix=/opt/ecap \
+    --enable-static \
+    --disable-shared \
+    CXXFLAGS="-Os -fPIC -std=gnu++03 -fpermissive -Wno-error"
+
+RUN make -j$(nproc) && make install
+
+RUN ls -lh /opt/ecap/lib/libecap*.a \
+    && file /opt/ecap/lib/libecap.a
+
+# =====================================================================
 # STAGE squid: Squid 3.3.8 with the deps we have so far
 # =====================================================================
 # For the first build pass we link OpenSSL 1.0 only and use apk-provided
@@ -224,6 +320,8 @@ RUN apk add --no-cache \
 COPY --from=openssl /opt/ossl10 /opt/ossl10
 COPY --from=pam /opt/pam /opt/pam
 COPY --from=ldap /opt/ldap /opt/ldap
+COPY --from=bdb /opt/bdb /opt/bdb
+COPY --from=ecap /opt/ecap /opt/ecap
 
 WORKDIR /src
 # Plain HTTP to dodge the cert-chain validation that fails on HTTPS
@@ -246,10 +344,10 @@ WORKDIR /src/squid-src
 # and configure bails with exit 77. Run configure with the normal LDFLAGS,
 # then pass -all-static to `make` directly so only the real binary link
 # at the end goes through libtool's static-everything path.
-ENV CFLAGS="-Os -fno-asynchronous-unwind-tables -I/opt/ossl10/include -I/opt/pam/include -I/opt/ldap/include" \
-    CXXFLAGS="-Os -std=gnu++03 -fpermissive -Wno-error -Wno-deprecated-declarations -I/opt/ossl10/include -I/opt/pam/include -I/opt/ldap/include" \
-    LDFLAGS="-L/opt/ossl10/lib -L/opt/pam/lib -L/opt/ldap/lib" \
-    PKG_CONFIG_PATH="/opt/ossl10/lib/pkgconfig:/opt/pam/lib/pkgconfig:/opt/ldap/lib/pkgconfig"
+ENV CFLAGS="-Os -fno-asynchronous-unwind-tables -I/opt/ossl10/include -I/opt/pam/include -I/opt/ldap/include -I/opt/bdb/include -I/opt/ecap/include" \
+    CXXFLAGS="-Os -std=gnu++03 -fpermissive -Wno-error -Wno-deprecated-declarations -I/opt/ossl10/include -I/opt/pam/include -I/opt/ldap/include -I/opt/bdb/include -I/opt/ecap/include" \
+    LDFLAGS="-L/opt/ossl10/lib -L/opt/pam/lib -L/opt/ldap/lib -L/opt/bdb/lib -L/opt/ecap/lib" \
+    PKG_CONFIG_PATH="/opt/ossl10/lib/pkgconfig:/opt/pam/lib/pkgconfig:/opt/ldap/lib/pkgconfig:/opt/ecap/lib/pkgconfig"
 
 RUN ./configure \
     --prefix=/usr \
@@ -260,9 +358,12 @@ RUN ./configure \
     --with-openssl=/opt/ossl10 \
     --enable-ssl \
     --enable-ssl-crtd \
-    --enable-auth-basic="NCSA,PAM,LDAP,getpwnam,fake" \
+    --enable-auth-basic="NCSA,PAM,LDAP,DB,getpwnam,fake" \
     --enable-external-acl-helpers="LDAP_group,session,unix_group" \
-    --disable-loadable-modules \
+    --enable-storeio="ufs,aufs,diskd,rock" \
+    --enable-ecap \
+    --with-included-ltdl \
+    --with-default-user=squid \
     --disable-strict-error-checking \
     --disable-translation \
     --disable-auto-locale \
