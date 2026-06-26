@@ -203,4 +203,3 @@ func notImplemented(r *bufio.Reader, opt string) error {
 	waitEnter(r)
 	return nil
 }
-
