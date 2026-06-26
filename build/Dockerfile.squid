@@ -31,6 +31,7 @@ ARG ALPINE_VERSION=3.19
 ARG OPENSSL_VERSION=1.0.2u
 ARG SQUID_VERSION=3.3.8
 ARG PAM_VERSION=1.5.3
+ARG LDAP_VERSION=2.4.59
 
 # =====================================================================
 # STAGE openssl: OpenSSL 1.0.2u static
@@ -139,6 +140,58 @@ RUN ls -lh /opt/pam/lib/libpam*.a \
     && file /opt/pam/lib/libpam.a /opt/pam/lib/libpam_misc.a
 
 # =====================================================================
+# STAGE ldap: OpenLDAP 2.4.59 static (client libs only)
+# =====================================================================
+# Squid uses libldap+liblber from OpenLDAP for its basic_ldap_auth and
+# ext_ldap_group_acl helpers. We don't need slapd (the LDAP server), so
+# --disable-slapd cuts the entire backend tree out. TLS is wired to our
+# /opt/ossl10 so LDAPS works against our OpenSSL 1.0.
+FROM alpine:${ALPINE_VERSION} AS ldap
+ARG LDAP_VERSION
+
+RUN apk add --no-cache \
+    build-base \
+    autoconf \
+    automake \
+    libtool \
+    pkgconfig \
+    curl \
+    ca-certificates \
+    linux-headers \
+    groff
+
+COPY --from=openssl /opt/ossl10 /opt/ossl10
+
+WORKDIR /src
+# openldap.org's official tarball ships pre-generated configure (saves
+# us a bootstrap step).
+RUN curl -fL "https://www.openldap.org/software/download/OpenLDAP/openldap-release/openldap-${LDAP_VERSION}.tgz" -o ldap.tgz \
+    && tar xzf ldap.tgz \
+    && rm ldap.tgz \
+    && ln -s openldap-${LDAP_VERSION} ldap-src
+
+WORKDIR /src/ldap-src
+RUN ./configure \
+    --prefix=/opt/ldap \
+    --enable-static \
+    --disable-shared \
+    --disable-slapd \
+    --disable-bdb \
+    --disable-hdb \
+    --disable-monitor \
+    --without-cyrus-sasl \
+    --without-systemd \
+    --with-tls=openssl \
+    CFLAGS="-Os -fPIC -I/opt/ossl10/include" \
+    CPPFLAGS="-I/opt/ossl10/include" \
+    LDFLAGS="-L/opt/ossl10/lib"
+
+RUN make -j$(nproc) depend && make -j$(nproc) && make install
+
+RUN ls -lh /opt/ldap/lib/libldap*.a /opt/ldap/lib/liblber*.a \
+    && file /opt/ldap/lib/libldap.a
+
+# =====================================================================
 # STAGE squid: Squid 3.3.8 with the deps we have so far
 # =====================================================================
 # For the first build pass we link OpenSSL 1.0 only and use apk-provided
@@ -170,6 +223,7 @@ RUN apk add --no-cache \
 
 COPY --from=openssl /opt/ossl10 /opt/ossl10
 COPY --from=pam /opt/pam /opt/pam
+COPY --from=ldap /opt/ldap /opt/ldap
 
 WORKDIR /src
 # Plain HTTP to dodge the cert-chain validation that fails on HTTPS
@@ -192,10 +246,10 @@ WORKDIR /src/squid-src
 # and configure bails with exit 77. Run configure with the normal LDFLAGS,
 # then pass -all-static to `make` directly so only the real binary link
 # at the end goes through libtool's static-everything path.
-ENV CFLAGS="-Os -fno-asynchronous-unwind-tables -I/opt/ossl10/include -I/opt/pam/include" \
-    CXXFLAGS="-Os -std=gnu++03 -fpermissive -Wno-error -Wno-deprecated-declarations -I/opt/ossl10/include -I/opt/pam/include" \
-    LDFLAGS="-L/opt/ossl10/lib -L/opt/pam/lib" \
-    PKG_CONFIG_PATH="/opt/ossl10/lib/pkgconfig:/opt/pam/lib/pkgconfig"
+ENV CFLAGS="-Os -fno-asynchronous-unwind-tables -I/opt/ossl10/include -I/opt/pam/include -I/opt/ldap/include" \
+    CXXFLAGS="-Os -std=gnu++03 -fpermissive -Wno-error -Wno-deprecated-declarations -I/opt/ossl10/include -I/opt/pam/include -I/opt/ldap/include" \
+    LDFLAGS="-L/opt/ossl10/lib -L/opt/pam/lib -L/opt/ldap/lib" \
+    PKG_CONFIG_PATH="/opt/ossl10/lib/pkgconfig:/opt/pam/lib/pkgconfig:/opt/ldap/lib/pkgconfig"
 
 RUN ./configure \
     --prefix=/usr \
@@ -206,7 +260,8 @@ RUN ./configure \
     --with-openssl=/opt/ossl10 \
     --enable-ssl \
     --enable-ssl-crtd \
-    --enable-auth-basic="NCSA,PAM,getpwnam,fake" \
+    --enable-auth-basic="NCSA,PAM,LDAP,getpwnam,fake" \
+    --enable-external-acl-helpers="LDAP_group,session,unix_group" \
     --disable-loadable-modules \
     --disable-strict-error-checking \
     --disable-translation \
