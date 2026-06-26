@@ -159,6 +159,8 @@ func runStatus() {
 	} else {
 		fmt.Println("installed: no")
 	}
+
+	fmt.Println()
 	fmt.Println("embedded binaries on disk:")
 	for _, name := range []string{"openvpn", "squid", "dropbearmulti"} {
 		path := install.LibDir + "/" + name
@@ -168,6 +170,61 @@ func runStatus() {
 			fmt.Printf("  - %s (missing)\n", path)
 		}
 	}
+
+	// Service rows: combine systemd state with /proc/net listening check
+	// so the user sees both "what systemd thinks" and "what is actually
+	// bound to the port" in one place.
+	fmt.Println()
+	fmt.Println("services:")
+	states, err := service.StatusAll()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "  (status:", err, ")")
+		return
+	}
+	for _, st := range states {
+		printStatusRow(st)
+	}
+}
+
+// printStatusRow formats one row of the `hexplus status` services table.
+// Columns: indicator + name, systemd active/sub, enable state, PID,
+// expected port + actual listening result.
+func printStatusRow(st service.State) {
+	if !st.UnitExists {
+		fmt.Printf("  ○ %-8s  unit not installed\n", st.Service.Name)
+		return
+	}
+
+	enabled := "disabled"
+	if st.Enabled {
+		enabled = "enabled"
+	}
+	pid := ""
+	if st.MainPID != "" && st.MainPID != "0" {
+		pid = " PID " + st.MainPID
+	}
+
+	portStatus := "?"
+	listening, err := service.ListenStatus(st.Service.Port, st.Service.PortProto)
+	switch {
+	case err != nil:
+		portStatus = "(proc check: " + err.Error() + ")"
+	case listening:
+		portStatus = "listening"
+	default:
+		portStatus = "not listening"
+	}
+
+	indicator := "○"
+	if st.ActiveState == "active" {
+		indicator = "●"
+	}
+	fmt.Printf("  %s %-8s  %s/%s  %s%s  port %d/%s: %s\n",
+		indicator, st.Service.Name,
+		st.ActiveState, st.SubState,
+		enabled, pid,
+		st.Service.Port, st.Service.PortProto, portStatus,
+	)
 }
 
 // runService dispatches the `hexplus service <verb> [name]` subcommand.

@@ -64,16 +64,18 @@ func Status(svc Service) (State, error) {
 		svc.UnitName,
 	).Output()
 	if err != nil {
-		if errors.Is(err, exec.ErrNotFound) {
-			return st, errSystemctlMissing
-		}
-		// dbus unavailable (typical in containers). Fall back to disk
-		// inspection: the unit's presence at SystemdUnitDir is the only
-		// thing we can know without a live systemd to ask.
+		// Either systemctl is missing (no systemd box) or dbus is
+		// unreachable (typical in containers). In both cases fall
+		// back to disk inspection: the unit file at SystemdUnitDir
+		// tells us whether install ever ran here.
 		if _, statErr := os.Stat(filepath.Join(SystemdUnitDir, svc.UnitName)); statErr == nil {
 			st.UnitExists = true
 			st.ActiveState = "unknown"
-			st.SubState = "no-dbus"
+			if errors.Is(err, exec.ErrNotFound) {
+				st.SubState = "no-systemctl"
+			} else {
+				st.SubState = "no-dbus"
+			}
 		}
 		return st, nil
 	}
