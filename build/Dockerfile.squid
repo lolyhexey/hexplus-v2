@@ -180,8 +180,16 @@ RUN set -e \
 # conversions).
 # -fpermissive: demote remaining C++03-vs-modern conflicts to warnings.
 # -Wno-error: don't let warnings stop the build.
-ENV CFLAGS="-Os -fno-asynchronous-unwind-tables -I/opt/ossl10/include -I/opt/ecap/include" \
-    CXXFLAGS="-Os -std=gnu++03 -fpermissive -Wno-error -Wno-deprecated-declarations -I/opt/ossl10/include -I/opt/ecap/include" \
+# -fno-delete-null-pointer-checks: Squid 3.3.8's splay tree (src/splay.h)
+# uses "if (this == NULL)" as a base case — technically UB in C++, but it
+# worked for a decade because all compilers honoured it. GCC with -Os treats
+# "this != NULL" as a provable invariant and deletes those checks entirely.
+# The result: ACLIP::parse() calls NULL->insert() for the first ACL entry,
+# splay() dereferences a NULL node, and Squid crashes with SIGSEGV at
+# aclIpAddrNetworkCompare+16 even with a config containing only http_port.
+# This flag preserves the null-pointer checks so the splay early-return fires.
+ENV CFLAGS="-Os -fno-asynchronous-unwind-tables -fno-delete-null-pointer-checks -I/opt/ossl10/include -I/opt/ecap/include" \
+    CXXFLAGS="-Os -std=gnu++03 -fpermissive -Wno-error -Wno-deprecated-declarations -fno-delete-null-pointer-checks -I/opt/ossl10/include -I/opt/ecap/include" \
     LDFLAGS="-L/opt/ossl10/lib -L/opt/ecap/lib" \
     PKG_CONFIG_PATH="/opt/ossl10/lib/pkgconfig:/opt/ecap/lib/pkgconfig"
 
