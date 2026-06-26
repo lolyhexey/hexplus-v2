@@ -1,22 +1,89 @@
-# Static Squid build via Alpine + musl.
+# Squid 3.3.8 full-feature static build.
 #
-# Status: HIGH RISK. Squid 3.3.8 (2013) uses old build conventions and the
-# OpenSSL 1.0 API, which Alpine 3.19 no longer ships. This Dockerfile starts
-# with Squid 5.x (current stable on Alpine) so we have a known-good baseline,
-# then later we can either:
-#   a) port the 3.3.8 build to use a pinned OpenSSL 1.0 + musl from an older
-#      Alpine, or
-#   b) accept 5.x (HEXPLUS payload patterns still work, banner differs).
+# Goal: a single static-musl `squid` binary that matches Debian/Ubuntu's
+# apt-installed `squid3=3.3.8-1ubuntu6` feature surface, so HEXPLUS v2 can
+# embed it and behave identically to v1.
 #
-# Reality: 3.3.8 is 11 years old. The behavior HEXPLUS depends on is HTTP
-# CONNECT + visible_hostname + custom error pages, none of which changed
-# between 3.x and 5.x. The version-in-banner is the only externally visible
-# difference, and HEXPLUS controls that via visible_hostname anyway.
+# Strategy: multi-stage Docker, where each dependency is built static from
+# source in its own stage, then the final Squid build links them all in.
+#
+# Phase plan inside this file (executed top-to-bottom, retrying as we go):
+#   STAGE openssl   - OpenSSL 1.0.2u (Squid 3.3.8 uses the 1.0 API exclusively;
+#                     OpenSSL 3.x removed SSL_library_init and friends, so we
+#                     vendor 1.0 here. Alpine 3.19 ships only 3.1.)
+#   STAGE pam       - linux-pam static (Squid's auth_pam helper)
+#   STAGE ldap      - OpenLDAP static (Squid's basic_ldap_auth + ldap_group)
+#   STAGE bdb       - Berkeley DB 5.3 static (Squid's libdbhelper + cache_dir
+#                     diskd / aufs metadata backends)
+#   STAGE ecap      - libecap 1.0.1 static (Squid's eCAP message-adaptation API)
+#   STAGE squid     - Squid 3.3.8, linked statically against all of the above
+#                     plus apk-provided static zlib / libxml2 / libpcre /
+#                     libcap-ng. -fpermissive + -std=gnu++03 to keep gcc 14
+#                     from rejecting C++03-era idioms (auto_ptr, etc.)
+#   STAGE export    - scratch image carrying just the final binary.
+#
+# This file evolves as each stage is verified. Stages below the
+# currently-working frontier may be commented out so 'docker buildx build
+# --target export' fails at the first real blocker rather than racing past
+# multiple stages.
 
-ARG SQUID_VERSION=5.9
 ARG ALPINE_VERSION=3.19
+ARG OPENSSL_VERSION=1.0.2u
+ARG SQUID_VERSION=3.3.8
 
-FROM alpine:${ALPINE_VERSION} AS build
+# =====================================================================
+# STAGE openssl: OpenSSL 1.0.2u static
+# =====================================================================
+FROM alpine:${ALPINE_VERSION} AS openssl
+ARG OPENSSL_VERSION
+
+RUN apk add --no-cache \
+    build-base \
+    perl \
+    curl \
+    ca-certificates \
+    linux-headers \
+    zlib-dev \
+    zlib-static
+
+WORKDIR /src
+# Pull from GitHub release; squid-cache.org / openssl.org both have TLS
+# cert chains that vary by distro; GitHub is the universal fallback.
+RUN curl -fL "https://github.com/openssl/openssl/releases/download/OpenSSL_$(echo ${OPENSSL_VERSION} | tr '.' '_')/openssl-${OPENSSL_VERSION}.tar.gz" -o openssl.tgz \
+    && tar xzf openssl.tgz \
+    && rm openssl.tgz
+
+WORKDIR /src/openssl-${OPENSSL_VERSION}
+# linux-x86_64: target triple. no-shared: skip .so. no-dso: skip dlopen
+# loadable engines, which we don't need and which complicate static linking.
+# no-zlib: SSL-level compression is deprecated since CRIME (2012); leaving
+# it on pulls inflate/deflate symbols into libcrypto.a and forces every
+# linker downstream to drag in -lz. Squid handles HTTP gzip via its own
+# zlib wiring, so disabling here is functionally a no-op for HEXPLUS.
+RUN ./Configure linux-x86_64 \
+    no-shared \
+    no-dso \
+    no-engine \
+    no-asm \
+    no-zlib \
+    --prefix=/opt/ossl10 \
+    --openssldir=/opt/ossl10/ssl \
+    -fPIC
+
+RUN make -j$(nproc) depend && make -j$(nproc) && make install_sw
+
+RUN /opt/ossl10/bin/openssl version \
+    && echo "---" \
+    && file /opt/ossl10/lib/libssl.a /opt/ossl10/lib/libcrypto.a \
+    && ls -lh /opt/ossl10/lib/libssl.a /opt/ossl10/lib/libcrypto.a
+
+# =====================================================================
+# STAGE squid: Squid 3.3.8 with the deps we have so far
+# =====================================================================
+# For the first build pass we link OpenSSL 1.0 only and use apk-provided
+# static zlib / pcre / libxml2 / libcap-ng. PAM / LDAP / BDB / eCAP get
+# added back as their own stages once this baseline compiles.
+FROM alpine:${ALPINE_VERSION} AS squid
 ARG SQUID_VERSION
 
 RUN apk add --no-cache \
@@ -25,73 +92,82 @@ RUN apk add --no-cache \
     automake \
     libtool \
     pkgconfig \
-    openssl-dev \
-    openssl-libs-static \
+    curl \
+    bash \
+    ca-certificates \
+    linux-headers \
+    zlib-dev \
+    zlib-static \
     libxml2-dev \
     libxml2-static \
     expat-dev \
     expat-static \
     libcap-dev \
     libcap-static \
-    perl \
-    curl \
-    bash \
-    ca-certificates \
-    linux-headers \
-    && update-ca-certificates
+    pcre-dev \
+    perl
+
+COPY --from=openssl /opt/ossl10 /opt/ossl10
 
 WORKDIR /src
-# Pull from GitHub mirror; squid-cache.org's TLS cert chain trips Alpine's
-# bundled CA store, which we don't want to disable wholesale.
-# Tag scheme is SQUID_<MAJOR>_<MINOR>, eg SQUID_5_9.
-RUN _tag="SQUID_$(echo ${SQUID_VERSION} | tr '.' '_')" \
-    && curl -fL "https://github.com/squid-cache/squid/archive/refs/tags/${_tag}.tar.gz" -o squid.tgz \
+# Plain HTTP to dodge the cert-chain validation that fails on HTTPS
+# (Alpine's bundled CAs don't validate squid-cache.org). The upstream
+# release tarball ships pre-generated configure, so we skip bootstrap.
+RUN curl -fL "http://www.squid-cache.org/Versions/v3/3.3/squid-${SQUID_VERSION}.tar.gz" -o squid.tgz \
     && tar xzf squid.tgz \
     && rm squid.tgz \
-    && ln -s squid-${_tag} squid-src
+    && ln -s squid-${SQUID_VERSION} squid-src
 
 WORKDIR /src/squid-src
-# GitHub source archive ships raw source: configure script isn't pre-generated,
-# so bootstrap it first via autotools. The official tarball would skip this step.
-RUN ./bootstrap.sh
+# -fpermissive: gcc 14 rejects several C++03-era idioms (auto_ptr,
+# implicit narrowing conversions, throw() specifiers). The semantics we
+# care about aren't affected; the alternative is patching ~80 source files.
+# -Wno-error: same, demote remaining warnings.
+# -std=gnu++03: pin language standard so newer defaults don't silently
+# break things further.
+# Configure runs link tests; if those see -static or -all-static, every
+# feature probe starts failing on libs that ship dynamic-only in Alpine,
+# and configure bails with exit 77. Run configure with the normal LDFLAGS,
+# then pass -all-static to `make` directly so only the real binary link
+# at the end goes through libtool's static-everything path.
+ENV CFLAGS="-Os -fno-asynchronous-unwind-tables -I/opt/ossl10/include" \
+    CXXFLAGS="-Os -std=gnu++03 -fpermissive -Wno-error -Wno-deprecated-declarations -I/opt/ossl10/include" \
+    LDFLAGS="-L/opt/ossl10/lib" \
+    PKG_CONFIG_PATH="/opt/ossl10/lib/pkgconfig"
+
 RUN ./configure \
     --prefix=/usr \
     --sysconfdir=/etc/squid \
     --libexecdir=/usr/lib/squid \
     --localstatedir=/var \
     --datadir=/usr/share/squid \
+    --with-openssl=/opt/ossl10 \
+    --enable-ssl \
+    --enable-ssl-crtd \
     --disable-loadable-modules \
-    --disable-eui \
-    --disable-arch-native \
     --disable-strict-error-checking \
-    --disable-optimizations \
-    --disable-htcp \
-    --disable-snmp \
-    --disable-wccp \
-    --disable-wccpv2 \
-    --disable-esi \
-    --disable-icmp \
     --disable-translation \
     --disable-auto-locale \
-    --disable-ipv6 \
     --without-systemd \
     --without-cppunit \
-    LDFLAGS="-static" \
-    CFLAGS="-Os" \
-    CXXFLAGS="-Os"
+    || (echo "============ CONFIGURE FAILED ============" \
+        && cat config.log | tail -80 \
+        && exit 1)
 
-RUN make -j$(nproc) LDFLAGS="-all-static" \
-    || (echo "============ BUILD FAILED ============" \
-        && tail -50 src/squid.log 2>/dev/null \
+RUN make -j$(nproc) LDFLAGS="-all-static -L/opt/ossl10/lib" \
+    || (echo "============ MAKE FAILED ============" \
         && exit 1)
 
 RUN mkdir -p /out \
     && cp src/squid /out/squid \
     && strip /out/squid \
-    && /out/squid -v 2>&1 | head -3 \
+    && /out/squid -v 2>&1 | head -5 \
     && echo "---" \
     && file /out/squid \
     && ls -lh /out/squid
 
+# =====================================================================
+# STAGE export: scratch image carrying only the final binary
+# =====================================================================
 FROM scratch AS export
-COPY --from=build /out/squid /squid
+COPY --from=squid /out/squid /squid
