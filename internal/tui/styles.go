@@ -9,13 +9,13 @@ import "github.com/charmbracelet/lipgloss"
 // Color palette intentionally mirrors the ANSI codes Modulos/conexao
 // used so the menu feels familiar to v1 operators.
 var (
-	colorRed    = lipgloss.Color("9")   // bright red - errors, warnings, off
-	colorGreen  = lipgloss.Color("10")  // bright green - on, confirmations
-	colorYellow = lipgloss.Color("11")  // bright yellow - labels, prompts
-	colorBlue   = lipgloss.Color("12")  // bright blue - banners
-	colorCyan   = lipgloss.Color("14")  // bright cyan - hostnames, values
-	colorWhite  = lipgloss.Color("15")  // bright white - body text
-	colorDim    = lipgloss.Color("8")   // dim gray - help footer
+	colorRed    = lipgloss.Color("9")  // bright red - errors, warnings, off
+	colorGreen  = lipgloss.Color("10") // bright green - on, confirmations
+	colorYellow = lipgloss.Color("11") // bright yellow - labels, prompts
+	colorBlue   = lipgloss.Color("12") // bright blue - banners
+	colorCyan   = lipgloss.Color("14") // bright cyan - hostnames, values
+	colorWhite  = lipgloss.Color("15") // bright white - body text
+	colorDim    = lipgloss.Color("8")  // dim gray - help footer
 )
 
 // styles is the curated set of lipgloss styles every view inside this

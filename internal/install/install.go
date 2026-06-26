@@ -2,11 +2,12 @@
 // binary into a running system installation.
 //
 // Layout HEXPLUS v2 lays down on disk:
-//   /usr/local/bin/hexplus            symlink (or copy) of the running binary
-//   /usr/local/lib/hexplus/openvpn    extracted from the embed tree
-//   /usr/local/lib/hexplus/squid      extracted from the embed tree
-//   /usr/local/lib/hexplus/dropbearmulti
-//   /var/lib/hexplus/installed        marker file (presence => first-run done)
+//
+//	/usr/local/bin/hexplus            symlink (or copy) of the running binary
+//	/usr/local/lib/hexplus/openvpn    extracted from the embed tree
+//	/usr/local/lib/hexplus/squid      extracted from the embed tree
+//	/usr/local/lib/hexplus/dropbearmulti
+//	/var/lib/hexplus/installed        marker file (presence => first-run done)
 //
 // Design rules:
 //   - install() is idempotent: calling it twice on the same machine produces

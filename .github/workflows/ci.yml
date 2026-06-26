@@ -1,0 +1,57 @@
+# PR validation: cheap checks that run on every push and pull request.
+#
+# We deliberately do NOT build the static deps here - those take ~10
+# minutes per arch even on native runners and aren't useful for catching
+# regressions in Go code. The embed.FS only complains at runtime when
+# files are missing; for compile-only validation, the placeholder
+# markers (.gitkeep + README.placeholder) under internal/assets/bin/
+# are enough to satisfy //go:embed without producing a runnable binary.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: gofmt
+        run: |
+          OUT=$(gofmt -l .)
+          if [ -n "$OUT" ]; then
+            echo "::error::gofmt found unformatted files:"
+            echo "$OUT"
+            exit 1
+          fi
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go test
+        run: go test ./...
+
+      - name: Placeholder static binaries (so //go:embed has something to walk)
+        run: |
+          # The release workflow stages real binaries here; for the
+          # compile-only check we just need the embed paths to exist
+          # so //go:embed bin/openvpn etc. doesn't error at build time.
+          touch internal/assets/bin/openvpn \
+                internal/assets/bin/squid \
+                internal/assets/bin/dropbearmulti
+
+      - name: go build (compile-only)
+        env:
+          CGO_ENABLED: '0'
+          GOOS: linux
+          GOARCH: amd64
+        run: go build -o /dev/null ./...

@@ -11,9 +11,9 @@
 // HTTP Injector, the official OpenVPN Connect for Android < 3.x) reject
 // the certs:
 //
-//   CA:     RSA-2048, valid 10 years, basicConstraints CA=true.
-//   Server: RSA-2048, valid 10 years, EKU = serverAuth, signed by CA.
-//   Client: RSA-2048, valid 10 years, EKU = clientAuth, signed by CA.
+//	CA:     RSA-2048, valid 10 years, basicConstraints CA=true.
+//	Server: RSA-2048, valid 10 years, EKU = serverAuth, signed by CA.
+//	Client: RSA-2048, valid 10 years, EKU = clientAuth, signed by CA.
 //
 // ECDSA P-256 would produce smaller faster keys but a couple of payload-
 // injector apps still ship OpenSSL 1.0 forks that can't parse ECDSA
@@ -32,9 +32,9 @@ import (
 )
 
 const (
-	keyBits        = 2048
-	caValidity     = 10 * 365 * 24 * time.Hour
-	leafValidity   = 10 * 365 * 24 * time.Hour
+	keyBits      = 2048
+	caValidity   = 10 * 365 * 24 * time.Hour
+	leafValidity = 10 * 365 * 24 * time.Hour
 )
 
 // Cert bundles a parsed cert with its private key and the PEM blobs we

@@ -29,12 +29,12 @@ type State struct {
 }
 
 // Start calls `systemctl start hexplus-<name>`. Returns nil on success.
-func Start(svc Service) error      { return run("start", svc.UnitName) }
-func Stop(svc Service) error       { return run("stop", svc.UnitName) }
-func Restart(svc Service) error    { return run("restart", svc.UnitName) }
-func Enable(svc Service) error     { return run("enable", svc.UnitName) }
-func Disable(svc Service) error    { return run("disable", svc.UnitName) }
-func TryReload(svc Service) error  { return run("try-reload-or-restart", svc.UnitName) }
+func Start(svc Service) error     { return run("start", svc.UnitName) }
+func Stop(svc Service) error      { return run("stop", svc.UnitName) }
+func Restart(svc Service) error   { return run("restart", svc.UnitName) }
+func Enable(svc Service) error    { return run("enable", svc.UnitName) }
+func Disable(svc Service) error   { return run("disable", svc.UnitName) }
+func TryReload(svc Service) error { return run("try-reload-or-restart", svc.UnitName) }
 
 // Status queries systemctl for one service's current state. UnitExists
 // will be false (and no err returned) if the unit file isn't installed.

@@ -1,12 +1,13 @@
 // hexplus - single-binary HEXPLUS v2 entry point.
 //
 // Subcommands:
-//   (none)         print banner + auto-install if not installed yet
-//   version        print version metadata
-//   install        idempotent install: extract binaries + copy self to /usr/local/bin
-//   uninstall      reverse install (leaves /etc/openvpn etc. alone)
-//   extract        dev-only: extract embedded assets to --lib-dir without installing
-//   status         report install state + presence of each embedded binary on disk
+//
+//	(none)         print banner + auto-install if not installed yet
+//	version        print version metadata
+//	install        idempotent install: extract binaries + copy self to /usr/local/bin
+//	uninstall      reverse install (leaves /etc/openvpn etc. alone)
+//	extract        dev-only: extract embedded assets to --lib-dir without installing
+//	status         report install state + presence of each embedded binary on disk
 //
 // Service supervision (running openvpn/squid/dropbear), user management, and
 // the TUI menu are deliberately not here yet - they come in later phases. This

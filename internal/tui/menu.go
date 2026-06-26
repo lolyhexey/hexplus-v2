@@ -292,6 +292,6 @@ func joinVertical(parts ...string) string {
 // drops back to pageMain.
 type returnToMain struct{}
 
-func (returnToMain) Init() tea.Cmd                           { return nil }
-func (r returnToMain) Update(tea.Msg) (tea.Model, tea.Cmd)   { return r, nil }
-func (returnToMain) View() string                            { return "" }
+func (returnToMain) Init() tea.Cmd                         { return nil }
+func (r returnToMain) Update(tea.Msg) (tea.Model, tea.Cmd) { return r, nil }
+func (returnToMain) View() string                          { return "" }

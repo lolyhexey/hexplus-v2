@@ -23,10 +23,10 @@ import (
 // customer and expect to type it in. ExpiresInDays of 0 means "no
 // expiry" (typical for a lifetime account).
 type AddInput struct {
-	Name           string
-	Password       string
-	ExpiresInDays  int
-	Limit          int
+	Name          string
+	Password      string
+	ExpiresInDays int
+	Limit         int
 }
 
 // AddResult is what Add reports back: bytes of the generated .ovpn so

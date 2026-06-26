@@ -1,0 +1,163 @@
+# Release: tag-driven, one binary per supported Linux arch.
+#
+# Trigger: push of any tag matching v*. The tag name (without the
+# leading 'v') becomes the version baked into the binary via -ldflags,
+# and is reused as the GitHub Release tag.
+#
+# Layout:
+#   build job (matrix)  - one per arch, builds the three static deps
+#                         (openvpn, dropbear, squid) via Docker buildx
+#                         on a matching native runner, stages them
+#                         under internal/assets/bin/, cross-compiles
+#                         the Go binary, uploads it as an artifact.
+#   release job         - downloads every per-arch artifact, drops a
+#                         SHA256SUMS next to them, then publishes a
+#                         GitHub Release with the lot attached.
+#
+# Why native arm64 runners (ubuntu-24.04-arm) instead of QEMU on the
+# amd64 host: building Squid 3.3.8 full-feature through binfmt
+# emulation took ~40 minutes locally; the same build native on arm64
+# is ~5 minutes and our trial of qemu actually segfaulted during the
+# squid -k parse smoke test on the build artifact (kernel-arm64
+# emulation corner case). Native runners avoid both.
+
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write  # required for actions/create-release
+
+jobs:
+  build:
+    name: Build hexplus-linux-${{ matrix.arch }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+            platform: linux/amd64
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+            platform: linux/arm64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve version metadata
+        id: meta
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          COMMIT="$(git rev-parse --short HEAD)"
+          DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "commit=${COMMIT}" >> "$GITHUB_OUTPUT"
+          echo "date=${DATE}" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - uses: docker/setup-buildx-action@v3
+
+      # The dropbear, openvpn, and squid Dockerfiles all read TARGETARCH
+      # from buildx so each runner produces a binary that matches its own
+      # kernel - no QEMU step needed.
+      - name: Build static dropbear
+        run: |
+          docker buildx build \
+            --platform ${{ matrix.platform }} \
+            --file build/Dockerfile.dropbear \
+            --output type=local,dest=internal/assets/bin/_dropbear \
+            --target export \
+            build/
+
+      - name: Build static openvpn
+        run: |
+          docker buildx build \
+            --platform ${{ matrix.platform }} \
+            --file build/Dockerfile.openvpn \
+            --output type=local,dest=internal/assets/bin/_openvpn \
+            --target export \
+            build/
+
+      - name: Build static squid (full feature)
+        run: |
+          docker buildx build \
+            --platform ${{ matrix.platform }} \
+            --file build/Dockerfile.squid \
+            --output type=local,dest=internal/assets/bin/_squid \
+            --target export \
+            build/
+
+      - name: Stage statics for go:embed
+        run: |
+          cp internal/assets/bin/_openvpn/openvpn        internal/assets/bin/openvpn
+          cp internal/assets/bin/_dropbear/dropbearmulti internal/assets/bin/dropbearmulti
+          cp internal/assets/bin/_squid/squid            internal/assets/bin/squid
+          file internal/assets/bin/openvpn internal/assets/bin/squid internal/assets/bin/dropbearmulti
+
+      - name: Cross-compile hexplus-linux-${{ matrix.arch }}
+        env:
+          CGO_ENABLED: '0'
+          GOOS: linux
+          GOARCH: ${{ matrix.arch }}
+        run: |
+          VERSION="${{ steps.meta.outputs.version }}"
+          COMMIT="${{ steps.meta.outputs.commit }}"
+          DATE="${{ steps.meta.outputs.date }}"
+          LDFLAGS="-s -w \
+            -X github.com/lolyhexey/hexplus/internal/version.Version=${VERSION} \
+            -X github.com/lolyhexey/hexplus/internal/version.Commit=${COMMIT} \
+            -X github.com/lolyhexey/hexplus/internal/version.Date=${DATE}"
+          mkdir -p dist
+          go build -ldflags "${LDFLAGS}" -o dist/hexplus-linux-${{ matrix.arch }} ./cmd/hexplus
+          ls -lh dist/
+
+      - name: Smoke-test the artifact
+        run: |
+          ./dist/hexplus-linux-${{ matrix.arch }} version
+          ./dist/hexplus-linux-${{ matrix.arch }} help | head -5
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: hexplus-linux-${{ matrix.arch }}
+          path: dist/hexplus-linux-${{ matrix.arch }}
+          if-no-files-found: error
+          retention-days: 7
+
+  release:
+    name: Publish GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Generate SHA256SUMS
+        working-directory: dist
+        run: |
+          ls -lh .
+          sha256sum hexplus-linux-* > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Create or update GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          files: |
+            dist/hexplus-linux-amd64
+            dist/hexplus-linux-arm64
+            dist/SHA256SUMS

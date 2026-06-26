@@ -120,8 +120,8 @@ func Init(opts InitOptions) (InitResult, error) {
 		return res, err
 	}
 	if err := writeAll(map[string]filePayload{
-		PKIDir + "/ca.crt":    {data: ca.CertPEM, mode: 0o644},
-		PKIDir + "/ca.key":    {data: ca.KeyPEM, mode: 0o600},
+		PKIDir + "/ca.crt":     {data: ca.CertPEM, mode: 0o644},
+		PKIDir + "/ca.key":     {data: ca.KeyPEM, mode: 0o600},
 		OpenVPNDir + "/ca.crt": {data: ca.CertPEM, mode: 0o644},
 	}, &res); err != nil {
 		return res, err
@@ -133,8 +133,8 @@ func Init(opts InitOptions) (InitResult, error) {
 		return res, err
 	}
 	if err := writeAll(map[string]filePayload{
-		PKIDir + "/server.crt":    {data: srv.CertPEM, mode: 0o644},
-		PKIDir + "/server.key":    {data: srv.KeyPEM, mode: 0o600},
+		PKIDir + "/server.crt":     {data: srv.CertPEM, mode: 0o644},
+		PKIDir + "/server.key":     {data: srv.KeyPEM, mode: 0o600},
 		OpenVPNDir + "/server.crt": {data: srv.CertPEM, mode: 0o644},
 		OpenVPNDir + "/server.key": {data: srv.KeyPEM, mode: 0o600},
 	}, &res); err != nil {
@@ -148,7 +148,7 @@ func Init(opts InitOptions) (InitResult, error) {
 		return res, err
 	}
 	if err := writeAll(map[string]filePayload{
-		PKIDir + "/ta.key":    {data: taKey, mode: 0o600},
+		PKIDir + "/ta.key":     {data: taKey, mode: 0o600},
 		OpenVPNDir + "/ta.key": {data: taKey, mode: 0o600},
 	}, &res); err != nil {
 		return res, err
@@ -166,11 +166,11 @@ func Init(opts InitOptions) (InitResult, error) {
 
 // CertInfo summarizes one stored cert for `hexplus pki status`.
 type CertInfo struct {
-	Path    string
-	Present bool
-	Subject string
+	Path     string
+	Present  bool
+	Subject  string
 	NotAfter string // YYYY-MM-DD
-	Issuer  string
+	Issuer   string
 }
 
 // InspectCert reads a PEM cert file and returns a summary. Missing
