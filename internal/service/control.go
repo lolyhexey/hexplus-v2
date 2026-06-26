@@ -59,7 +59,6 @@ func Status(svc Service) (State, error) {
 		"-p", "ActiveState",
 		"-p", "SubState",
 		"-p", "MainPID",
-		"--value",
 		"--no-pager",
 		svc.UnitName,
 	).Output()
@@ -80,15 +79,21 @@ func Status(svc Service) (State, error) {
 		return st, nil
 	}
 
-	// --value emits each property on its own line in the request order.
-	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
-	for len(lines) < 4 {
-		lines = append(lines, "")
+	// Parse Key=Value lines. We intentionally do NOT use --value because
+	// systemd 250+ may reorder properties alphabetically regardless of
+	// how the flags were passed, which earlier silently corrupted our
+	// LoadState/ActiveState assignment (bug surfaced in v2.2.1 — menu
+	// thought squid was installed when its unit file didn't exist).
+	props := make(map[string]string, 4)
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		if eq := strings.IndexByte(line, '='); eq > 0 {
+			props[line[:eq]] = strings.TrimSpace(line[eq+1:])
+		}
 	}
-	loadState := strings.TrimSpace(lines[0])
-	st.ActiveState = strings.TrimSpace(lines[1])
-	st.SubState = strings.TrimSpace(lines[2])
-	st.MainPID = strings.TrimSpace(lines[3])
+	loadState := props["LoadState"]
+	st.ActiveState = props["ActiveState"]
+	st.SubState = props["SubState"]
+	st.MainPID = props["MainPID"]
 	st.UnitExists = loadState != "" && loadState != "not-found" && loadState != "masked"
 
 	// is-enabled returns non-zero for disabled units but the stdout is
