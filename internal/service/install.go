@@ -212,6 +212,9 @@ func bootstrapConfigFor(svc Service) (string, error) {
 	if err := os.MkdirAll("/etc/openvpn", 0o755); err != nil {
 		return "", err
 	}
+	if err := os.MkdirAll("/var/spool/squid", 0o750); err != nil {
+		return "", err
+	}
 	switch svc.Name {
 	case "squid":
 		wrote, err := writeIfMissing("/etc/squid/squid.conf", []byte(defaultSquidConf), 0o644)

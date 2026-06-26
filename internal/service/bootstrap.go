@@ -133,5 +133,5 @@ access_log stdio:/dev/stdout
 cache_log stdio:/dev/stderr
 
 pid_filename /run/hexplus-squid.pid
-coredump_dir /var/cache/squid
+coredump_dir /var/spool/squid
 `
