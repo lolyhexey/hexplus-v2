@@ -30,6 +30,7 @@ import (
 	"github.com/lolyhexey/hexplus/internal/pki"
 	"github.com/lolyhexey/hexplus/internal/proxy"
 	"github.com/lolyhexey/hexplus/internal/service"
+	"github.com/lolyhexey/hexplus/internal/tui"
 	"github.com/lolyhexey/hexplus/internal/user"
 	"github.com/lolyhexey/hexplus/internal/version"
 )
@@ -61,6 +62,8 @@ func main() {
 		runUser(rest)
 	case "proxy":
 		runProxy(rest)
+	case "menu":
+		runMenu()
 	case "help", "-h", "--help":
 		printUsage(os.Stdout)
 	default:
@@ -98,6 +101,7 @@ Subcommands:
   proxy list             show configured proxies
   proxy remove <name>    drop a proxy's config row + systemd unit
   proxy run <name>       foreground server (invoked by systemd)
+  menu                   launch the Thai bubbletea TUI (default action when installed)
   extract              dev-only: extract embedded assets to --lib-dir without installing
   version              print version metadata
   help                 this message
@@ -107,17 +111,26 @@ With no subcommand, hexplus prints a banner and, on first run as root, auto-inst
 }
 
 func runDefault() {
-	fmt.Println(version.Full())
-	fmt.Printf("running on %s/%s\n\n", runtime.GOOS, runtime.GOARCH)
+	// Default action when installed: drop straight into the TUI. That's
+	// what HEXPLUS v1 customers expect from typing `menu` at a shell.
 	if install.IsInstalled() {
-		fmt.Println("hexplus is installed. The TUI menu lands in a later phase; for now")
-		fmt.Println("you can poke at:")
-		fmt.Println("  hexplus status")
-		fmt.Println("  hexplus uninstall")
+		runMenu()
 		return
 	}
+	fmt.Println(version.Full())
+	fmt.Printf("running on %s/%s\n\n", runtime.GOOS, runtime.GOARCH)
 	fmt.Println("hexplus has not been installed on this box yet.")
 	fmt.Println("Run 'sudo hexplus install' to lay down the embedded binaries.")
+}
+
+// runMenu launches the bubble tea TUI. Errors come back rendered so
+// the operator sees something useful if their terminal lacks the
+// alt-screen escapes (e.g. running over a SOCKS-only sshd channel).
+func runMenu() {
+	if err := tui.Run(); err != nil {
+		fmt.Fprintln(os.Stderr, "menu:", err)
+		os.Exit(1)
+	}
 }
 
 func runInstall() {
