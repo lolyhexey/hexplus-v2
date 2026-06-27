@@ -314,11 +314,22 @@ func sshAddPort(r *bufio.Reader, current []int) error {
 	// If sshd_config has NO explicit Port lines yet the default 22 is implicit.
 	// Writing Port <new> alone would drop 22 — so preserve it explicitly first.
 	hasExplicit := regexp.MustCompile(`(?m)^\s*Port\s+\d+`).MatchString(string(data))
-	newConf := strings.TrimRight(string(data), "\n")
+	portLine := fmt.Sprintf("Port %d", newPort)
 	if !hasExplicit {
-		newConf += "\nPort 22"
+		portLine = "Port 22\n" + portLine
 	}
-	newConf += fmt.Sprintf("\nPort %d\n", newPort)
+	// Insert BEFORE any Match block — appending after Match puts the Port
+	// directive inside the block, which sshd rejects at startup.
+	conf := string(data)
+	matchIdx := strings.Index(conf, "\nMatch ")
+	var newConf string
+	if matchIdx >= 0 {
+		newConf = strings.TrimRight(conf[:matchIdx], "\n") +
+			"\n" + portLine + "\n" +
+			conf[matchIdx+1:]
+	} else {
+		newConf = strings.TrimRight(conf, "\n") + "\n" + portLine + "\n"
+	}
 	if err := os.WriteFile("/etc/ssh/sshd_config", []byte(newConf), 0o644); err != nil {
 		return fmt.Errorf("เขียน sshd_config ไม่ได้: %w", err)
 	}
