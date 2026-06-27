@@ -137,6 +137,28 @@ func runProxies(r *bufio.Reader) error {
 	}
 }
 
+// dbSet writes cfg into the DB keyed by cfg.Name, removing any legacy
+// entry whose map-key matched s.key but Name differs (migration from old format).
+func dbSet(db *proxy.DB, cfg proxy.Config) {
+	for k, v := range db.Proxies {
+		if v.Name == cfg.Name || k == cfg.Name {
+			delete(db.Proxies, k)
+			break
+		}
+	}
+	db.Proxies[cfg.Name] = cfg
+}
+
+// dbDelete removes the entry whose Name matches cfg.Name (regardless of map key).
+func dbDelete(db *proxy.DB, name string) {
+	for k, v := range db.Proxies {
+		if v.Name == name || k == name {
+			delete(db.Proxies, k)
+			return
+		}
+	}
+}
+
 // slotEntries returns all DB entries that belong to slot s.
 // Matches key == s.key (legacy) or strings.HasPrefix(key, s.key+"-").
 func slotEntries(db *proxy.DB, s *proxySlot) []proxy.Config {
@@ -254,16 +276,20 @@ func proxyRemoveEntry(r *bufio.Reader, db *proxy.DB, cfg proxy.Config) {
 	fmt.Printf("\033[41;1;37m  ลบพอร์ต %d (%s)  \033[0m\n\n", cfg.Port, cfg.Name)
 
 	unitName := cfg.UnitName()
-	_ = progress.Run([]progress.Step{
+	err := progress.Run([]progress.Step{
 		{Label: fmt.Sprintf("ปิด + ลบ proxy พอร์ต %d", cfg.Port), Work: func() error {
-			if err := systemctlRun("disable", "--now", unitName); err != nil {
-				return err
-			}
+			// Ignore systemctl error — unit may already be missing (stale DB entry).
+			_ = systemctlRun("disable", "--now", unitName)
 			_, _, _, _ = proxy.RemoveUnit(cfg)
-			delete(db.Proxies, cfg.Name)
+			dbDelete(db, cfg.Name)
 			return db.Save()
 		}},
 	})
+	if err != nil {
+		fmt.Printf("\n"+cRedBold+"[ผิดพลาด] "+cYelBold+"%v"+cReset+"\n", err)
+		waitEnter(r)
+		return
+	}
 	fmt.Printf("\n"+cGrnBold+"ลบพอร์ต %d สำเร็จแล้ว!"+cReset+"\n", cfg.Port)
 	waitEnter(r)
 }
@@ -363,7 +389,7 @@ func proxyInstall(r *bufio.Reader, db *proxy.DB, s *proxySlot) error {
 	unitName := cfg.UnitName()
 	if err := progress.Run([]progress.Step{
 		{Label: "บันทึก config + เขียน unit file", Work: func() error {
-			db.Proxies[s.key] = cfg
+			dbSet(db, cfg)
 			if err := db.Save(); err != nil {
 				return err
 			}
@@ -523,7 +549,7 @@ func proxyChangeStatus(r *bufio.Reader, db *proxy.DB, s *proxySlot) {
 	}
 
 	cfg.StatusMsg = fmt.Sprintf(`<font color="%s">%s</font>`, color, text)
-	db.Proxies[s.key] = cfg
+	dbSet(db, cfg)
 	fmt.Println()
 
 	unitName := cfg.UnitName()
