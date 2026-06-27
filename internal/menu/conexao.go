@@ -121,15 +121,26 @@ func paintConexaoMenu() {
 	fmt.Println()
 }
 
-// serviceMenu renders the install / start / stop / enable / disable
-// sub-menu for one service. This is where the lazy install lands -
-// "install" extracts JUST this binary, writes JUST its unit, bootstraps
-// JUST its config.
+// serviceMenu routes to the per-service sub-menus that mirror v1's
+// fun_squid / fun_drop / fun_openvpn layouts byte-for-byte (lives in
+// service_menus.go). The previous generic start/stop/restart grid was
+// removed - it didn't match v1 and confused operators who came from
+// the bash script.
 func serviceMenu(r *bufio.Reader, name string) error {
 	svc, ok := service.ByName(name)
 	if !ok {
 		return fmt.Errorf("unknown service %q", name)
 	}
+	switch name {
+	case "squid":
+		return squidMenu(r, svc)
+	case "dropbear":
+		return dropbearMenu(r, svc)
+	case "openvpn":
+		return openvpnMenu(r, svc)
+	}
+	// Fallback for any future service that's wired into service.All()
+	// but doesn't have a custom menu yet: minimal generic flow.
 	for {
 		clearScreen()
 		st, _ := service.Status(svc)
