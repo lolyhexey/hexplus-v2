@@ -48,6 +48,11 @@ const (
 	idleTimeout = 60 * time.Second
 )
 
+// allowedPrefixes mirrors v1's ALLOWED_PREFIXES tuple. X-Real-Host values
+// that don't start with one of these are rejected with 403, same as v1.
+// DefaultHost is always trusted (it was set by the operator, not the client).
+var allowedPrefixes = []string{"127.0.0.1", "0.0.0.0", "localhost"}
+
 // Handler holds the immutable per-proxy configuration that the request
 // path needs. Concurrency-safe: every field is read-only after New().
 type Handler struct {
@@ -143,9 +148,36 @@ func (h *Handler) handleConn(client net.Conn) {
 	_ = client.SetReadDeadline(time.Time{}) // clear
 
 	header := buf[:n]
+
+	// X-Real-Host: if present, use it (client-supplied target).
+	// X-Split: if present, read and discard one more buffer — some injector
+	// apps split the request into two packets; we drain the second before
+	// opening upstream so the upstream sees a clean connection (v1 behaviour).
 	hostPort := findHeader(header, "X-Real-Host")
+	if findHeader(header, "X-Split") != "" {
+		extra := make([]byte, readBufBytes)
+		_, _ = client.Read(extra)
+	}
+	fromClient := hostPort != ""
 	if hostPort == "" {
 		hostPort = h.cfg.DefaultHost
+	}
+
+	// Restrict X-Real-Host to the same prefixes v1 ALLOWED_PREFIXES enforced.
+	// DefaultHost is operator-set so it's always trusted.
+	if fromClient {
+		allowed := false
+		lower := strings.ToLower(hostPort)
+		for _, p := range allowedPrefixes {
+			if strings.HasPrefix(lower, p) {
+				allowed = true
+				break
+			}
+		}
+		if !allowed {
+			_, _ = client.Write([]byte("HTTP/1.1 403 Forbidden!\r\n\r\n"))
+			return
+		}
 	}
 
 	// Dial upstream.

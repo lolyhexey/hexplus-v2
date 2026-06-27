@@ -471,12 +471,12 @@ func detectOpenVPNHost() string {
 			if strings.HasPrefix(line, "port ") {
 				p := strings.TrimSpace(strings.TrimPrefix(line, "port "))
 				if _, err := strconv.Atoi(p); err == nil {
-					return "127.0.0.1:" + p
+					return "0.0.0.0:" + p
 				}
 			}
 		}
 	}
-	return "127.0.0.1:1194"
+	return "0.0.0.0:1194"
 }
 
 // systemctlRun shells out to systemctl. Kept here (not in service/) to
