@@ -128,10 +128,26 @@ pipeline_prefetch off
 # No caching - HEXPLUS uses squid as a connect proxy, not a cache.
 cache deny all
 
-# Route logs through systemd's journal via stdio: pseudo-paths.
-access_log stdio:/dev/stdout
-cache_log stdio:/dev/stderr
+# Disable unlinkd (cache-file deletion helper - not needed with cache deny all).
+# Squid 3.3.x does not support "none" keyword; /bin/true exits immediately
+# which is harmless since we never write cache files.
+unlinkd_program /bin/true
 
-pid_filename /run/hexplus-squid.pid
+# Suppress logging - stdout/stderr are journald pipes; open(2) on /dev/stdout
+# returns ENXIO in a systemd service, and stdio: prefix requires Squid 3.4+.
+access_log none
+cache_log /dev/null
+
+# Squid refuses to run as root even when explicitly requested; use nobody which
+# exists on all Linux systems. Port binding happens before the privilege drop.
+cache_effective_user nobody
+
+# Override compiled-in data paths to dirs we create at install time so Squid
+# does not require system squid package files.
+icon_directory /var/spool/squid/icons
+error_directory /var/spool/squid/errors
+logfile_daemon /usr/lib/squid/log_file_daemon
+
+pid_filename /var/spool/squid/squid.pid
 coredump_dir /var/spool/squid
 `

@@ -102,6 +102,7 @@ jobs:
           cp internal/assets/bin/_openvpn/openvpn        internal/assets/bin/openvpn
           cp internal/assets/bin/_dropbear/dropbearmulti internal/assets/bin/dropbearmulti
           cp internal/assets/bin/_squid/squid            internal/assets/bin/squid
+          cp internal/assets/bin/_squid/mime.conf        internal/assets/bin/mime.conf
           file internal/assets/bin/openvpn internal/assets/bin/squid internal/assets/bin/dropbearmulti
 
       - name: Cross-compile hexplus-${{ matrix.unameArch }}

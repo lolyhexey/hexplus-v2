@@ -14,6 +14,7 @@
 /internal/assets/bin/*
 !/internal/assets/bin/.gitkeep
 !/internal/assets/bin/README.placeholder
+!/internal/assets/bin/mime.conf
 
 # Local dev
 .idea/

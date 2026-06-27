@@ -217,6 +217,34 @@ func bootstrapConfigFor(svc Service) (string, error) {
 	}
 	switch svc.Name {
 	case "squid":
+		// Squid data files - mime.conf is bundled in the hexplus binary.
+		if err := os.MkdirAll("/usr/share/squid", 0o755); err != nil {
+			return "", err
+		}
+		if _, err := extractEmbedded("mime.conf", "/usr/share/squid/mime.conf", 0o644); err != nil {
+			return "", fmt.Errorf("extract mime.conf: %w", err)
+		}
+		// Runtime dirs: icons/errors must exist (can be empty for a connect proxy).
+		// Owned by nobody because squid drops privileges before writing pid file.
+		for _, dir := range []string{
+			"/var/spool/squid/icons",
+			"/var/spool/squid/errors",
+		} {
+			if err := os.MkdirAll(dir, 0o755); err != nil {
+				return "", err
+			}
+			_ = os.Lchown(dir, 65534, 65534) // nobody:nogroup
+		}
+		_ = os.Lchown("/var/spool/squid", 65534, 65534)
+		// logfile_daemon stub: Squid checks for binary existence at startup even
+		// when access_log is none. A script that reads-and-discards satisfies it.
+		if err := os.MkdirAll("/usr/lib/squid", 0o755); err != nil {
+			return "", err
+		}
+		const logDaemonStub = "#!/bin/sh\nwhile IFS= read -r line; do :; done\n"
+		if _, err := writeIfMissing("/usr/lib/squid/log_file_daemon", []byte(logDaemonStub), 0o755); err != nil {
+			return "", fmt.Errorf("write log_file_daemon stub: %w", err)
+		}
 		wrote, err := writeIfMissing("/etc/squid/squid.conf", []byte(defaultSquidConf), 0o644)
 		if err != nil {
 			return "", err

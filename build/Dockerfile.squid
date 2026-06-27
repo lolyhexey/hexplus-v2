@@ -225,14 +225,16 @@ RUN make -j"$(nproc)" LDFLAGS="-static -L/opt/ossl10/lib" \
 
 RUN mkdir -p /out \
     && cp src/squid /out/squid \
+    && cp mime.conf /out/mime.conf \
     && strip /out/squid \
     && /out/squid -v 2>&1 | head -5 \
     && echo "---" \
     && file /out/squid \
-    && ls -lh /out/squid
+    && ls -lh /out/squid /out/mime.conf
 
 # =====================================================================
 # STAGE export: scratch image carrying only the final binary
 
 FROM scratch AS export
 COPY --from=squid /out/squid /squid
+COPY --from=squid /out/mime.conf /mime.conf
