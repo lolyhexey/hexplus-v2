@@ -15,6 +15,7 @@
 !/internal/assets/bin/.gitkeep
 !/internal/assets/bin/README.placeholder
 !/internal/assets/bin/mime.conf
+!/internal/assets/bin/squid-errors.tar.gz
 
 # Local dev
 .idea/

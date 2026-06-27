@@ -228,11 +228,12 @@ RUN mkdir -p /out \
     && MIME=$(find . -maxdepth 3 \( -name 'mime.conf' -o -name 'mime.conf.default' \) -not -path './debian/*' | head -1) \
     && [ -n "$MIME" ] || { echo "ERROR: mime.conf not found in source tree"; find . -name 'mime.conf*' | head -10; exit 1; } \
     && cp "$MIME" /out/mime.conf \
+    && tar czf /out/squid-errors.tar.gz -C errors/en . \
     && strip /out/squid \
     && /out/squid -v 2>&1 | head -5 \
     && echo "---" \
     && file /out/squid \
-    && ls -lh /out/squid /out/mime.conf
+    && ls -lh /out/squid /out/mime.conf /out/squid-errors.tar.gz
 
 # =====================================================================
 # STAGE export: scratch image carrying only the final binary
@@ -240,3 +241,4 @@ RUN mkdir -p /out \
 FROM scratch AS export
 COPY --from=squid /out/squid /squid
 COPY --from=squid /out/mime.conf /mime.conf
+COPY --from=squid /out/squid-errors.tar.gz /squid-errors.tar.gz

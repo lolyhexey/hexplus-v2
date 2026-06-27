@@ -10,6 +10,8 @@
 package service
 
 import (
+	"archive/tar"
+	"compress/gzip"
 	"errors"
 	"fmt"
 	"io"
@@ -159,6 +161,61 @@ func embeddedBinariesForService(svc Service) ([]binaryDef, error) {
 	}
 }
 
+// extractTarGz extracts an embedded .tar.gz archive into destDir,
+// skipping files that already exist with the correct size.
+func extractTarGz(srcName, destDir string) error {
+	fs := assets.Binaries()
+	in, err := fs.Open(srcName)
+	if err != nil {
+		return fmt.Errorf("open embedded %s: %w", srcName, err)
+	}
+	defer in.Close()
+	gr, err := gzip.NewReader(in)
+	if err != nil {
+		return fmt.Errorf("gzip reader: %w", err)
+	}
+	defer gr.Close()
+	tr := tar.NewReader(gr)
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return err
+		}
+		if hdr.Typeflag != tar.TypeReg {
+			continue
+		}
+		dest := filepath.Join(destDir, filepath.Base(hdr.Name))
+		if st, err := os.Stat(dest); err == nil && st.Size() == hdr.Size {
+			if _, err := io.Copy(io.Discard, tr); err != nil {
+				return err
+			}
+			continue
+		}
+		tmp := dest + ".tmp"
+		f, err := os.OpenFile(tmp, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+		if err != nil {
+			return err
+		}
+		if _, err := io.Copy(f, tr); err != nil {
+			f.Close()
+			os.Remove(tmp)
+			return err
+		}
+		if err := f.Close(); err != nil {
+			os.Remove(tmp)
+			return err
+		}
+		if err := os.Rename(tmp, dest); err != nil {
+			os.Remove(tmp)
+			return err
+		}
+	}
+	return nil
+}
+
 // extractEmbedded copies one file from the embed tree to dest. Returns
 // (true, nil) when a write happened, (false, nil) when the file was
 // already present with the same size.
@@ -244,6 +301,9 @@ func bootstrapConfigFor(svc Service) (string, error) {
 		const logDaemonStub = "#!/bin/sh\nwhile IFS= read -r line; do :; done\n"
 		if _, err := writeIfMissing("/usr/lib/squid/log_file_daemon", []byte(logDaemonStub), 0o755); err != nil {
 			return "", fmt.Errorf("write log_file_daemon stub: %w", err)
+		}
+		if err := extractTarGz("squid-errors.tar.gz", "/var/spool/squid/errors"); err != nil {
+			return "", fmt.Errorf("extract squid error templates: %w", err)
 		}
 		wrote, err := writeIfMissing("/etc/squid/squid.conf", []byte(defaultSquidConf), 0o644)
 		if err != nil {
