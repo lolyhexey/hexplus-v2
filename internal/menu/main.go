@@ -21,6 +21,7 @@ import (
 // We loop forever reading numbers from stdin; the user exits explicitly
 // via option 00 or by sending EOF (Ctrl+D).
 func Run() error {
+	ensureSSHConfig()
 	r := bufio.NewReader(os.Stdin)
 	for {
 		if err := paintMainMenu(); err != nil {

@@ -385,6 +385,69 @@ func sshDeletePort(r *bufio.Reader, current []int) error {
 	return nil
 }
 
+// ensureSSHConfig enforces the four directives that v1 writes during
+// changeroot + dropbear install. Called once when hexplus starts so
+// every fresh VPS has the right sshd_config without extra steps.
+//
+// Uses the same idempotent pattern as v1:
+//   remove any existing line (commented or not) → append the wanted value
+//
+// Silently no-ops when not root or sshd_config is unreadable.
+// Restarts sshd only when at least one directive was changed.
+func ensureSSHConfig() {
+	if os.Geteuid() != 0 {
+		return
+	}
+	data, err := os.ReadFile("/etc/ssh/sshd_config")
+	if err != nil {
+		return
+	}
+	conf := string(data)
+	changed := false
+	for _, kv := range [][2]string{
+		{"PasswordAuthentication", "yes"},
+		{"PermitRootLogin", "yes"},
+		{"PermitTunnel", "yes"},
+		{"UsePAM", "yes"},
+	} {
+		conf, changed = ensureSSHDirective(conf, kv[0], kv[1], changed)
+	}
+	if !changed {
+		return
+	}
+	if err := os.WriteFile("/etc/ssh/sshd_config", []byte(conf), 0o644); err != nil {
+		return
+	}
+	restartSSH()
+}
+
+// ensureSSHDirective guarantees that exactly one line "key val" exists in
+// the sshd_config text. Removes commented variants and duplicates.
+func ensureSSHDirective(conf, key, val string, alreadyChanged bool) (string, bool) {
+	want := key + " " + val
+	var kept []string
+	found := false
+	changed := alreadyChanged
+	for _, line := range strings.Split(conf, "\n") {
+		bare := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(line), "#"))
+		if strings.HasPrefix(bare, key+" ") || bare == key {
+			if strings.TrimSpace(line) == want && !found {
+				kept = append(kept, line)
+				found = true
+			} else {
+				changed = true
+			}
+			continue
+		}
+		kept = append(kept, line)
+	}
+	if !found {
+		kept = append(kept, want)
+		changed = true
+	}
+	return strings.Join(kept, "\n"), changed
+}
+
 // restartSSH tries common systemd unit names for the SSH daemon.
 func restartSSH() {
 	for _, unit := range []string{"ssh", "sshd", "openssh-server"} {
