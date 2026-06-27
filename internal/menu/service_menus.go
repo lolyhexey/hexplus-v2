@@ -272,6 +272,11 @@ func squidInstall(r *bufio.Reader, svc service.Service) error {
 func squidUninstall(r *bufio.Reader, svc service.Service) error {
 	clearScreen()
 	paintTitleBar("            ถอนการติดตั้งพร็อกซี่              ")
+	fmt.Print("\n" + cYelBold + "ต้องการลบ SQUID PROXY หรือไม่ " + cRedBold + "? " + cGrnBold + "[s/n]: " + cReset)
+	line, _ := r.ReadString('\n')
+	if strings.TrimSpace(line) != "s" {
+		return nil
+	}
 	fmt.Println("\n" + cGrnBold + "กำลังลบ SQUID PROXY !" + cReset)
 	res, err := service.UninstallService(svc)
 	if err != nil {
@@ -282,6 +287,18 @@ func squidUninstall(r *bufio.Reader, svc service.Service) error {
 	for _, p := range res.Removed {
 		fmt.Println(cYelBold + "  - " + p + cReset)
 	}
+
+	// Remove config directory and data files installed by hexplus.
+	for _, path := range []string{
+		"/etc/squid",
+		"/usr/share/squid/mime.conf",
+		"/var/spool/squid/errors",
+	} {
+		if err := os.RemoveAll(path); err == nil {
+			fmt.Println(cYelBold + "  - " + path + cReset)
+		}
+	}
+
 	fmt.Println("\n" + cGrnBold + "ลบ SQUID สำเร็จแล้ว !" + cReset)
 	waitEnter(r)
 	return nil
@@ -592,16 +609,25 @@ func openvpnMenu(r *bufio.Reader, svc service.Service) error {
 				waitEnter(r)
 			}
 		case "2", "02":
+			clearScreen()
+			paintTitleBar("             ลบ OPENVPN              ")
+			fmt.Print("\n" + cYelBold + "ต้องการลบ OPENVPN หรือไม่ " + cRedBold + "? " + cGrnBold + "[s/n]: " + cReset)
+			confirm, _ := r.ReadString('\n')
+			if strings.TrimSpace(confirm) != "s" {
+				continue
+			}
+			fmt.Println("\n" + cGrnBold + "กำลังลบ OPENVPN !" + cReset)
 			res, err := service.UninstallService(svc)
 			if err != nil {
 				fmt.Println("\n" + cRedBold + "[ผิดพลาด] " + cYelBold + err.Error() + cReset)
 				waitEnter(r)
 				continue
 			}
-			fmt.Println("\n" + cGrnBold + "ลบ OPENVPN สำเร็จแล้ว" + cReset)
 			for _, p := range res.Removed {
 				fmt.Println(cYelBold + "  - " + p + cReset)
 			}
+			cleanupOpenVPN()
+			fmt.Println("\n" + cGrnBold + "ลบ OPENVPN สำเร็จแล้ว" + cReset)
 			waitEnter(r)
 			return nil
 		case "3", "03":
@@ -1145,6 +1171,71 @@ func openvpnSetupPKICustom(r *bufio.Reader) (pki.InitResult, error) {
 		CAValidityYears: years,
 		Force:           true,
 	})
+}
+
+// cleanupOpenVPN removes everything setupNetworking wrote and deletes
+// /etc/openvpn (including PKI). Matches v1's rmv_open() cleanup.
+func cleanupOpenVPN() {
+	const rclocal = "/etc/rc.local"
+
+	// Read the server IP from rc.local before we delete anything — it's
+	// stored in the SNAT line "iptables -t nat -A POSTROUTING -s 10.8.0.0/16
+	// -j SNAT --to <IP>".
+	serverIP := ""
+	if raw, err := os.ReadFile(rclocal); err == nil {
+		for _, line := range strings.Split(string(raw), "\n") {
+			if strings.Contains(line, "-j SNAT --to ") {
+				parts := strings.Fields(line)
+				for i, p := range parts {
+					if p == "--to" && i+1 < len(parts) {
+						serverIP = parts[i+1]
+					}
+				}
+			}
+		}
+	}
+
+	// Remove live iptables SNAT rule.
+	if serverIP != "" {
+		exec.Command("iptables", "-t", "nat", "-D", "POSTROUTING",
+			"-s", "10.8.0.0/16", "-j", "SNAT", "--to", serverIP).Run()
+		fmt.Println(cYelBold + "  - iptables SNAT 10.8.0.0/16 → " + serverIP + cReset)
+	}
+
+	// Clean rc.local: remove every line that setupNetworking injected.
+	cleanPrefixes := []string{
+		"echo 1 > /proc/sys/net/ipv4/ip_forward",
+		"echo 1 > /proc/sys/net/ipv6/conf/all/disable_ipv6",
+		"iptables -t nat -A POSTROUTING -s 10.8.0.0/16",
+		"iptables -A INPUT -p tcp --dport 25 -j DROP",
+		"iptables -A INPUT -p tcp --dport 110 -j DROP",
+		"iptables -A OUTPUT -p tcp --dport 25 -j DROP",
+		"iptables -A OUTPUT -p tcp --dport 110 -j DROP",
+		"iptables -A FORWARD -p tcp --dport 25 -j DROP",
+		"iptables -A FORWARD -p tcp --dport 110 -j DROP",
+	}
+	if raw, err := os.ReadFile(rclocal); err == nil {
+		var kept []string
+		for _, line := range strings.Split(string(raw), "\n") {
+			drop := false
+			for _, pfx := range cleanPrefixes {
+				if strings.Contains(line, pfx) {
+					drop = true
+					break
+				}
+			}
+			if !drop {
+				kept = append(kept, line)
+			}
+		}
+		_ = os.WriteFile(rclocal, []byte(strings.Join(kept, "\n")), 0o755)
+		fmt.Println(cYelBold + "  - rc.local: ลบ iptables entries" + cReset)
+	}
+
+	// Remove /etc/openvpn (configs + PKI + certs).
+	if err := os.RemoveAll("/etc/openvpn"); err == nil {
+		fmt.Println(cYelBold + "  - /etc/openvpn" + cReset)
+	}
 }
 
 // ovpnPort reads the port from /etc/openvpn/server.conf, fallback 1194.
