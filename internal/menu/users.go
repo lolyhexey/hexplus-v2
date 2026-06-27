@@ -542,6 +542,8 @@ func runSSHMonitor(r *bufio.Reader) error {
 	sshUsers := readSSHLogins()
 	ovpnUsers := readOpenVPNUsers()
 	dropbearUsers := readDropbearLogins()
+	sshTimes := readSSHTimes()
+	ovpnTimes := readOpenVPNTimes()
 
 	records := systemUsers()
 	if len(records) == 0 {
@@ -566,12 +568,24 @@ func runSSHMonitor(r *bufio.Reader) error {
 		if limit == 0 {
 			limit = 1
 		}
+
+		timer := "00:00:00"
+		if ssh > 0 {
+			if t, ok := sshTimes[rec.Name]; ok {
+				timer = t
+			}
+		} else if ovp > 0 {
+			if t, ok := ovpnTimes[rec.Name]; ok {
+				timer = t
+			}
+		}
+
 		fmt.Printf("%s %-15s %s %-13s %-10s %s\n",
 			cYelBold,
 			rec.Name,
 			statusText,
 			fmt.Sprintf("%d/%d", conex, limit),
-			"--:--:--",
+			timer,
 			cReset)
 		fmt.Println(cBluBold + separator + cReset)
 	}
@@ -579,50 +593,161 @@ func runSSHMonitor(r *bufio.Reader) error {
 	return nil
 }
 
-// readSSHLogins returns a map[user]count of active sshd: sessions, by
-// parsing `ps -eo user:32,comm` and filtering for the sshd "user@pts"
-// or session-with-username form. We treat any process whose user is in
-// the records list as one session.
-func readSSHLogins() map[string]int {
-	out := map[string]int{}
-	cmd := exec.Command("ps", "-eo", "user=,comm=")
-	data, err := cmd.Output()
+// readSSHTimes returns a map[user]elapsed for the earliest pts/ session
+// of each user, formatted as HH:MM:SS. Parses `who` login timestamps.
+func readSSHTimes() map[string]string {
+	out := map[string]string{}
+	data, err := exec.Command("who").Output()
 	if err != nil {
 		return out
 	}
+	now := time.Now()
 	for _, line := range strings.Split(string(data), "\n") {
-		fields := strings.Fields(line)
-		if len(fields) < 2 {
+		f := strings.Fields(line)
+		// "user pts/0 2026-06-28 10:00 (ip)"
+		if len(f) < 4 || f[0] == "root" || !strings.HasPrefix(f[1], "pts/") {
 			continue
 		}
-		if !strings.Contains(fields[1], "sshd") {
+		loginStr := f[2] + " " + f[3]
+		t, err := time.ParseInLocation("2006-01-02 15:04", loginStr, now.Location())
+		if err != nil {
 			continue
 		}
-		if fields[0] == "root" || fields[0] == "sshd" {
-			continue
+		elapsed := now.Sub(t)
+		h := int(elapsed.Hours())
+		m := int(elapsed.Minutes()) % 60
+		s := int(elapsed.Seconds()) % 60
+		ts := fmt.Sprintf("%02d:%02d:%02d", h, m, s)
+		// Keep the earliest (longest) session per user.
+		if prev, exists := out[f[0]]; !exists || ts > prev {
+			out[f[0]] = ts
 		}
-		out[fields[0]]++
 	}
 	return out
 }
 
-// readOpenVPNUsers parses /etc/openvpn/openvpn-status.log for CLIENT_LIST
-// rows. Format: CLIENT_LIST,<cn>,<addr>,...
-func readOpenVPNUsers() map[string]int {
+// readOpenVPNTimes returns a map[user]elapsed parsed from "Connected Since"
+// in the status log (status-version 1 format).
+func readOpenVPNTimes() map[string]string {
+	out := map[string]string{}
+	var data []byte
+	for _, p := range []string{
+		"/var/log/openvpn-status.log",
+		"/etc/openvpn/openvpn-status.log",
+	} {
+		if d, err := os.ReadFile(p); err == nil {
+			data = d
+			break
+		}
+	}
+	if data == nil {
+		return out
+	}
+	now := time.Now()
+	inList := false
+	for _, line := range strings.Split(string(data), "\n") {
+		if strings.HasPrefix(line, "Common Name,") {
+			inList = true
+			continue
+		}
+		if strings.HasPrefix(line, "ROUTING TABLE") || strings.HasPrefix(line, "GLOBAL STATS") {
+			inList = false
+			continue
+		}
+		if !inList || line == "" {
+			continue
+		}
+		// "username,real_addr,bytes_rx,bytes_tx,connected_since"
+		parts := strings.Split(line, ",")
+		if len(parts) < 5 {
+			continue
+		}
+		username := parts[0]
+		since := parts[4] // "2026-06-27 16:58:36"
+		t, err := time.ParseInLocation("2006-01-02 15:04:05", since, now.Location())
+		if err != nil {
+			continue
+		}
+		elapsed := now.Sub(t)
+		h := int(elapsed.Hours())
+		m := int(elapsed.Minutes()) % 60
+		s := int(elapsed.Seconds()) % 60
+		out[username] = fmt.Sprintf("%02d:%02d:%02d", h, m, s)
+	}
+	return out
+}
+
+// readSSHLogins returns a map[user]count of active SSH sessions by
+// parsing `who` output. On Ubuntu 22+, all sshd child processes run as
+// root so `ps | grep sshd | user!=root` finds nothing. `who` reads
+// /var/run/utmp directly and reliably lists every pts/* session.
+func readSSHLogins() map[string]int {
 	out := map[string]int{}
-	data, err := os.ReadFile("/etc/openvpn/openvpn-status.log")
+	data, err := exec.Command("who").Output()
 	if err != nil {
 		return out
 	}
 	for _, line := range strings.Split(string(data), "\n") {
-		if !strings.HasPrefix(line, "CLIENT_LIST,") {
+		f := strings.Fields(line)
+		// "username  pts/0  2026-06-28 10:00 (ip)"
+		if len(f) < 2 {
 			continue
 		}
-		parts := strings.Split(line, ",")
-		if len(parts) < 2 {
+		if f[0] == "root" {
 			continue
 		}
-		out[parts[1]]++
+		if strings.HasPrefix(f[1], "pts/") {
+			out[f[0]]++
+		}
+	}
+	return out
+}
+
+// readOpenVPNUsers parses the OpenVPN status log for connected clients.
+// Supports both status-version 1 (default, CSV after "Common Name," header)
+// and status-version 2 (tab-separated CLIENT_LIST\t rows).
+// Tries /var/log/openvpn-status.log first (where our server.conf writes),
+// then /etc/openvpn/openvpn-status.log as fallback.
+func readOpenVPNUsers() map[string]int {
+	out := map[string]int{}
+	var data []byte
+	for _, p := range []string{
+		"/var/log/openvpn-status.log",
+		"/etc/openvpn/openvpn-status.log",
+	} {
+		if d, err := os.ReadFile(p); err == nil {
+			data = d
+			break
+		}
+	}
+	if data == nil {
+		return out
+	}
+	inList := false
+	for _, line := range strings.Split(string(data), "\n") {
+		// status-version 2: tab-separated
+		if strings.HasPrefix(line, "CLIENT_LIST\t") {
+			parts := strings.SplitN(line, "\t", 3)
+			if len(parts) >= 2 && parts[1] != "Common Name" {
+				out[parts[1]]++
+			}
+			continue
+		}
+		// status-version 1 (default): CSV section between header and ROUTING TABLE
+		if strings.HasPrefix(line, "Common Name,") {
+			inList = true
+			continue
+		}
+		if strings.HasPrefix(line, "ROUTING TABLE") || strings.HasPrefix(line, "GLOBAL STATS") {
+			inList = false
+			continue
+		}
+		if inList && line != "" {
+			parts := strings.SplitN(line, ",", 2)
+			if len(parts) >= 1 && parts[0] != "" {
+				out[parts[0]]++
+			}
+		}
 	}
 	return out
 }
