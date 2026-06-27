@@ -190,18 +190,17 @@ func proxyToggle(r *bufio.Reader, db *proxy.DB, s *proxySlot) {
 		fmt.Println()
 		unitName := cfg.UnitName()
 		_ = progress.Run([]progress.Step{
-			{Label: "ปิด + ปิดใช้งาน " + s.label, Work: func() error {
-				return systemctlRun("disable", "--now", unitName)
-			}},
-			{Label: "ลบ unit file + อัปเดต DB", Work: func() error {
-				time.Sleep(300 * time.Millisecond)
+			{Label: "ปิด + ลบ " + s.label, Work: func() error {
+				if err := systemctlRun("disable", "--now", unitName); err != nil {
+					return err
+				}
 				_, _, _, _ = proxy.RemoveUnit(cfg)
 				delete(db.Proxies, s.key)
 				return db.Save()
 			}},
 		})
 		fmt.Println("\n" + cGrnBold + "ปิด " + s.label + " สำเร็จแล้ว!" + cReset)
-		time.Sleep(2 * time.Second)
+		waitEnter(r)
 	} else {
 		// --- TURN ON ---
 		fmt.Println("\033[44;1;37m             " + s.label + "              \033[0m")
@@ -324,8 +323,8 @@ func proxyInstall(r *bufio.Reader, db *proxy.DB, s *proxySlot) error {
 			if err := systemctlRun("enable", "--now", unitName); err != nil {
 				return err
 			}
-			for i := 0; i < 8; i++ {
-				time.Sleep(500 * time.Millisecond)
+			for i := 0; i < 5; i++ {
+				time.Sleep(300 * time.Millisecond)
 				if ok, _ := service.ListenStatus(port, "tcp"); ok {
 					up = true
 					break
@@ -335,7 +334,7 @@ func proxyInstall(r *bufio.Reader, db *proxy.DB, s *proxySlot) error {
 		}},
 	}); err != nil {
 		fmt.Println("\n" + cRedBold + "[ผิดพลาด] " + cYelBold + err.Error() + cReset)
-		time.Sleep(2 * time.Second)
+		waitEnter(r)
 		return nil
 	}
 
@@ -347,7 +346,7 @@ func proxyInstall(r *bufio.Reader, db *proxy.DB, s *proxySlot) error {
 			" PROXY SOCKS เริ่มทำงานไม่สำเร็จบนพอร์ต " + strconv.Itoa(port) +
 			" — ตรวจสอบ: journalctl -u " + unitName + cReset)
 	}
-	time.Sleep(2 * time.Second)
+	waitEnter(r)
 	return nil
 }
 
@@ -461,9 +460,7 @@ func proxyChangeStatus(r *bufio.Reader, db *proxy.DB, s *proxySlot) {
 			return nil
 		}},
 		{Label: "รีสตาร์ท " + s.label, Work: func() error {
-			err := systemctlRun("restart", unitName)
-			time.Sleep(300 * time.Millisecond)
-			return err
+			return systemctlRun("restart", unitName)
 		}},
 	}); err != nil {
 		fmt.Println("\n" + cRedBold + "[ผิดพลาด] " + err.Error() + cReset)
@@ -472,7 +469,7 @@ func proxyChangeStatus(r *bufio.Reader, db *proxy.DB, s *proxySlot) {
 	}
 
 	fmt.Println("\n" + cGrnBold + "เปลี่ยนสถานะสำเร็จแล้ว!" + cReset)
-	time.Sleep(2 * time.Second)
+	waitEnter(r)
 }
 
 // sanitizeASCII strips non-printable and non-ASCII characters from s.

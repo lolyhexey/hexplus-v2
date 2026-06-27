@@ -270,12 +270,8 @@ func squidUninstall(r *bufio.Reader, svc service.Service) error {
 	fmt.Println()
 
 	if err := progress.Run([]progress.Step{
-		{Label: "หยุด + ปิดใช้งาน SQUID", Work: func() error {
-			_ = service.Stop(svc)
-			_ = service.Disable(svc)
-			return nil
-		}},
-		{Label: "ลบ binary + unit file", Work: func() error {
+		{Label: "หยุด + ลบ SQUID", Work: func() error {
+			// UninstallService calls Stop+Disable internally — don't pre-stop.
 			_, err := service.UninstallService(svc)
 			return err
 		}},
@@ -505,12 +501,7 @@ func dropbearMenu(r *bufio.Reader, svc service.Service) error {
 			paintTitleBar("              ลบ DROPBEAR               ")
 			fmt.Println()
 			if err := progress.Run([]progress.Step{
-				{Label: "หยุด + ปิดใช้งาน DROPBEAR", Work: func() error {
-					_ = service.Stop(svc)
-					_ = service.Disable(svc)
-					return nil
-				}},
-				{Label: "ลบ binary + unit file", Work: func() error {
+				{Label: "หยุด + ลบ DROPBEAR", Work: func() error {
 					_, err := service.UninstallService(svc)
 					return err
 				}},
@@ -629,16 +620,11 @@ func openvpnMenu(r *bufio.Reader, svc service.Service) error {
 			paintTitleBar("             ลบ OPENVPN              ")
 			fmt.Println()
 			if err := progress.Run([]progress.Step{
-				{Label: "หยุด + ปิดใช้งาน OPENVPN", Work: func() error {
-					_ = service.Stop(svc)
-					_ = service.Disable(svc)
-					return nil
-				}},
-				{Label: "ลบ binary + unit file", Work: func() error {
+				{Label: "หยุด + ลบ OPENVPN", Work: func() error {
 					_, err := service.UninstallService(svc)
 					return err
 				}},
-				{Label: "ล้าง iptables + rc.local", Work: func() error {
+				{Label: "ล้าง iptables + rc.local + /etc/openvpn", Work: func() error {
 					cleanupOpenVPN()
 					return nil
 				}},
