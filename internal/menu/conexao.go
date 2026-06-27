@@ -311,7 +311,14 @@ func sshAddPort(r *bufio.Reader, current []int) error {
 	if rdErr != nil {
 		return fmt.Errorf("อ่าน sshd_config ไม่ได้: %w", rdErr)
 	}
-	newConf := strings.TrimRight(string(data), "\n") + fmt.Sprintf("\nPort %d\n", newPort)
+	// If sshd_config has NO explicit Port lines yet the default 22 is implicit.
+	// Writing Port <new> alone would drop 22 — so preserve it explicitly first.
+	hasExplicit := regexp.MustCompile(`(?m)^\s*Port\s+\d+`).MatchString(string(data))
+	newConf := strings.TrimRight(string(data), "\n")
+	if !hasExplicit {
+		newConf += "\nPort 22"
+	}
+	newConf += fmt.Sprintf("\nPort %d\n", newPort)
 	if err := os.WriteFile("/etc/ssh/sshd_config", []byte(newConf), 0o644); err != nil {
 		return fmt.Errorf("เขียน sshd_config ไม่ได้: %w", err)
 	}
