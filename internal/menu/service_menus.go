@@ -23,6 +23,7 @@ import (
 
 	"github.com/lolyhexey/hexplus/internal/assets"
 	"github.com/lolyhexey/hexplus/internal/pki"
+	"github.com/lolyhexey/hexplus/internal/progress"
 	"github.com/lolyhexey/hexplus/internal/service"
 )
 
@@ -193,77 +194,63 @@ func squidInstall(r *bufio.Reader, svc service.Service) error {
 	paintTitleBar("              ติดตั้งพร็อกซี่                ")
 	fmt.Println()
 
-	// Confirm server IP (v1 conexao does the same check).
+	// --- questions ---
 	ip := defaultServerIP()
 	if ip == "" {
 		ip = "ไม่สามารถตรวจสอบ IP ได้"
 	}
-	fmt.Printf("%sยืนยัน IP ของคุณเพื่อดำเนินการต่อ: %s%s%s\n\n",
-		cWhtBold, cYelBold, ip, cReset)
-
-	// Ask for port.
+	fmt.Printf("%sยืนยัน IP ของคุณเพื่อดำเนินการต่อ: %s%s%s\n\n", cWhtBold, cYelBold, ip, cReset)
 	fmt.Printf("%sกรุณาใส่พอร์ตที่คุณต้องการ ?%s\n\n", cGrnBold, cReset)
 	fmt.Printf("%s[!] พอร์ตพร็อกซี่ตัวอย่าง %sEX: 80 8080%s\n\n", cYelBold, cWhtBold, cReset)
 	fmt.Print(cGrnBold + "กรุณาใส่พอร์ต" + cYelBold + ": " + cReset)
 	portLine, _ := r.ReadString('\n')
-	portStr := strings.TrimSpace(portLine)
-	port, convErr := strconv.Atoi(portStr)
+	port, convErr := strconv.Atoi(strings.TrimSpace(portLine))
 	if convErr != nil || port < 1 || port > 65535 {
 		fmt.Println(cRedBold + "[ผิดพลาด] พอร์ตไม่ถูกต้อง" + cReset)
 		waitEnter(r)
 		return nil
 	}
-
-	// Choose Squid version (v1 had 3.3.X vs 3.5.X from apt; v2 ships 3.3.8).
 	fmt.Println()
-	paintOptions([][2]string{
-		{"1", "พร็อกซี่เวอร์ชั่น 3.3.X"},
-		{"2", "พร็อกซี่เวอร์ชั่น 3.5.X"},
-	})
+	paintOptions([][2]string{{"1", "พร็อกซี่เวอร์ชั่น 3.3.X"}, {"2", "พร็อกซี่เวอร์ชั่น 3.5.X"}})
 	fmt.Println()
 	fmt.Print(cGrnBold + "เลือกเวอร์ชั่น" + cRedBold + "?" + cWhtBold + " : " + cReset)
 	verLine, _ := r.ReadString('\n')
-	_ = strings.TrimSpace(verLine) // both choices use the same embedded binary
+	_ = strings.TrimSpace(verLine)
 
-	// Install binary + unit files.
-	fmt.Println(cGrnBold + "\nกำลังติดตั้งพร็อกซี่ ..." + cReset)
-	res, err := service.InstallService(svc)
-	if err != nil {
-		fmt.Println(cRedBold + "[ผิดพลาด] " + cYelBold + err.Error() + cReset)
+	// --- install with progress ---
+	clearScreen()
+	paintTitleBar("              ติดตั้งพร็อกซี่                ")
+	fmt.Println()
+
+	var listening bool
+	if err := progress.Run([]progress.Step{
+		{Label: "แตกไฟล์ binary + unit", Work: func() error {
+			_, err := service.InstallService(svc)
+			return err
+		}},
+		{Label: "เขียน squid.conf", Work: func() error {
+			return os.WriteFile("/etc/squid/squid.conf", []byte(buildSquidConf(port, ip)), 0o644)
+		}},
+		{Label: "เริ่ม SQUID", Work: func() error {
+			_ = service.Enable(svc)
+			if err := service.Start(svc); err != nil {
+				return err
+			}
+			time.Sleep(700 * time.Millisecond)
+			listening, _ = service.ListenStatus(port, svc.PortProto)
+			return nil
+		}},
+	}); err != nil {
+		fmt.Println("\n" + cRedBold + "[ผิดพลาด] " + cYelBold + err.Error() + cReset)
 		waitEnter(r)
 		return nil
 	}
-	for _, p := range res.Extracted {
-		fmt.Println(cGrnBold + "  + " + cWhtBold + p + cReset)
-	}
-	for _, p := range res.UnitsWritten {
-		fmt.Println(cGrnBold + "  + " + cWhtBold + p + cReset)
-	}
-	for _, p := range res.ConfigsWritten {
-		fmt.Println(cGrnBold + "  + " + cWhtBold + p + cReset)
-	}
 
-	// Write the complete v1-style squid.conf: no "deny CONNECT !SSL_ports"
-	// rule so HTTP Injector can tunnel SSH (port 22) through Squid.
-	_ = os.WriteFile("/etc/squid/squid.conf", []byte(buildSquidConf(port, ip)), 0o644)
-
-	// Auto-start + verify port is listening (v1 conexao behaviour).
-	_ = service.Enable(svc)
-	if err := service.Start(svc); err != nil {
-		fmt.Println("\n" + cRedBold + "[ผิดพลาด]" + cYelBold +
-			" SQUID เริ่มทำงานไม่สำเร็จ: " + err.Error() +
-			" — ตรวจสอบ journalctl -u " + svc.UnitName + cReset)
-		waitEnter(r)
-		return nil
-	}
-	time.Sleep(700 * time.Millisecond)
-	listening, _ := service.ListenStatus(port, svc.PortProto)
+	fmt.Println()
 	if listening {
-		fmt.Println("\n" + cGrnBold + "ติดตั้งพร็อกซี่สำเร็จแล้ว!" + cReset)
+		fmt.Println(cGrnBold + "ติดตั้งพร็อกซี่สำเร็จแล้ว !" + cYelBold + " พอร์ต: " + cWhtBold + strconv.Itoa(port) + cReset)
 	} else {
-		fmt.Println("\n" + cRedBold + "[ผิดพลาด]" + cYelBold +
-			" SQUID เริ่มทำงานไม่สำเร็จ: บริการไม่ทำงานหลังติดตั้ง — ตรวจสอบ journalctl -u " +
-			svc.UnitName + cReset)
+		fmt.Println(cRedBold + "[ผิดพลาด]" + cYelBold + " SQUID เริ่มทำงานไม่สำเร็จ — ตรวจสอบ journalctl -u " + svc.UnitName + cReset)
 	}
 	waitEnter(r)
 	return nil
@@ -277,26 +264,31 @@ func squidUninstall(r *bufio.Reader, svc service.Service) error {
 	if strings.TrimSpace(line) != "s" {
 		return nil
 	}
-	fmt.Println("\n" + cGrnBold + "กำลังลบ SQUID PROXY !" + cReset)
-	res, err := service.UninstallService(svc)
-	if err != nil {
-		fmt.Println(cRedBold + "[ผิดพลาด] " + cYelBold + err.Error() + cReset)
+
+	clearScreen()
+	paintTitleBar("            ถอนการติดตั้งพร็อกซี่              ")
+	fmt.Println()
+
+	if err := progress.Run([]progress.Step{
+		{Label: "หยุด + ปิดใช้งาน SQUID", Work: func() error {
+			_ = service.Stop(svc)
+			_ = service.Disable(svc)
+			return nil
+		}},
+		{Label: "ลบ binary + unit file", Work: func() error {
+			_, err := service.UninstallService(svc)
+			return err
+		}},
+		{Label: "ล้าง config + ข้อมูล", Work: func() error {
+			for _, p := range []string{"/etc/squid", "/usr/share/squid/mime.conf", "/var/spool/squid/errors"} {
+				_ = os.RemoveAll(p)
+			}
+			return nil
+		}},
+	}); err != nil {
+		fmt.Println("\n" + cRedBold + "[ผิดพลาด] " + cYelBold + err.Error() + cReset)
 		waitEnter(r)
 		return nil
-	}
-	for _, p := range res.Removed {
-		fmt.Println(cYelBold + "  - " + p + cReset)
-	}
-
-	// Remove config directory and data files installed by hexplus.
-	for _, path := range []string{
-		"/etc/squid",
-		"/usr/share/squid/mime.conf",
-		"/var/spool/squid/errors",
-	} {
-		if err := os.RemoveAll(path); err == nil {
-			fmt.Println(cYelBold + "  - " + path + cReset)
-		}
 	}
 
 	fmt.Println("\n" + cGrnBold + "ลบ SQUID สำเร็จแล้ว !" + cReset)
@@ -502,16 +494,32 @@ func dropbearMenu(r *bufio.Reader, svc service.Service) error {
 				waitEnter(r)
 			}
 		case "2", "02":
-			res, err := service.UninstallService(svc)
-			if err != nil {
+			clearScreen()
+			paintTitleBar("              ลบ DROPBEAR               ")
+			fmt.Print("\n" + cYelBold + "ต้องการลบ DROPBEAR หรือไม่ " + cRedBold + "? " + cGrnBold + "[s/n]: " + cReset)
+			conf, _ := r.ReadString('\n')
+			if strings.TrimSpace(conf) != "s" {
+				continue
+			}
+			clearScreen()
+			paintTitleBar("              ลบ DROPBEAR               ")
+			fmt.Println()
+			if err := progress.Run([]progress.Step{
+				{Label: "หยุด + ปิดใช้งาน DROPBEAR", Work: func() error {
+					_ = service.Stop(svc)
+					_ = service.Disable(svc)
+					return nil
+				}},
+				{Label: "ลบ binary + unit file", Work: func() error {
+					_, err := service.UninstallService(svc)
+					return err
+				}},
+			}); err != nil {
 				fmt.Println("\n" + cRedBold + "[ผิดพลาด] " + cYelBold + err.Error() + cReset)
 				waitEnter(r)
 				continue
 			}
 			fmt.Println("\n" + cGrnBold + "ลบ DROPBEAR สำเร็จแล้ว" + cReset)
-			for _, p := range res.Removed {
-				fmt.Println(cYelBold + "  - " + p + cReset)
-			}
 			waitEnter(r)
 			return nil
 		default:
@@ -525,21 +533,22 @@ func dropbearInstall(r *bufio.Reader, svc service.Service) error {
 	clearScreen()
 	paintTitleBar("              ติดตั้ง DROPBEAR               ")
 	fmt.Println()
-	res, err := service.InstallService(svc)
-	if err != nil {
-		fmt.Println(cRedBold + "[ผิดพลาด] " + cYelBold + err.Error() + cReset)
+
+	if err := progress.Run([]progress.Step{
+		{Label: "แตกไฟล์ binary + unit", Work: func() error {
+			_, err := service.InstallService(svc)
+			return err
+		}},
+		{Label: "เริ่ม DROPBEAR", Work: func() error {
+			_ = service.Enable(svc)
+			return service.Start(svc)
+		}},
+	}); err != nil {
+		fmt.Println("\n" + cRedBold + "[ผิดพลาด] " + cYelBold + err.Error() + cReset)
 		waitEnter(r)
 		return nil
 	}
-	for _, p := range res.Extracted {
-		fmt.Println(cGrnBold + "  + " + cWhtBold + p + cReset)
-	}
-	_ = service.Enable(svc)
-	if err := service.Start(svc); err != nil {
-		fmt.Println("\n" + cRedBold + "[ผิดพลาด]" + cYelBold + " " + err.Error() + cReset)
-		waitEnter(r)
-		return nil
-	}
+
 	fmt.Println("\n" + cGrnBold + "ติดตั้ง DROPBEAR สำเร็จแล้ว!" + cReset)
 	waitEnter(r)
 	return nil
@@ -616,17 +625,28 @@ func openvpnMenu(r *bufio.Reader, svc service.Service) error {
 			if strings.TrimSpace(confirm) != "s" {
 				continue
 			}
-			fmt.Println("\n" + cGrnBold + "กำลังลบ OPENVPN !" + cReset)
-			res, err := service.UninstallService(svc)
-			if err != nil {
+			clearScreen()
+			paintTitleBar("             ลบ OPENVPN              ")
+			fmt.Println()
+			if err := progress.Run([]progress.Step{
+				{Label: "หยุด + ปิดใช้งาน OPENVPN", Work: func() error {
+					_ = service.Stop(svc)
+					_ = service.Disable(svc)
+					return nil
+				}},
+				{Label: "ลบ binary + unit file", Work: func() error {
+					_, err := service.UninstallService(svc)
+					return err
+				}},
+				{Label: "ล้าง iptables + rc.local", Work: func() error {
+					cleanupOpenVPN()
+					return nil
+				}},
+			}); err != nil {
 				fmt.Println("\n" + cRedBold + "[ผิดพลาด] " + cYelBold + err.Error() + cReset)
 				waitEnter(r)
 				continue
 			}
-			for _, p := range res.Removed {
-				fmt.Println(cYelBold + "  - " + p + cReset)
-			}
-			cleanupOpenVPN()
 			fmt.Println("\n" + cGrnBold + "ลบ OPENVPN สำเร็จแล้ว" + cReset)
 			waitEnter(r)
 			return nil
@@ -927,74 +947,59 @@ func openvpnInstall(r *bufio.Reader, svc service.Service) error {
 		proto = "udp"
 	}
 
-	// ---- extract binary + unit ----
-	fmt.Println()
-	fmt.Println(cGrnBold + "กำลังติดตั้ง OPENVPN !" + cReset)
-	fmt.Println()
-	res, err := service.InstallService(svc)
-	if err != nil {
-		fmt.Println(cRedBold + "[ผิดพลาด] " + cYelBold + err.Error() + cReset)
-		waitEnter(r)
-		return nil
-	}
-	for _, p := range res.Extracted {
-		fmt.Println(cGrnBold + "  + " + cWhtBold + p + cReset)
-	}
-	for _, p := range res.UnitsWritten {
-		fmt.Println(cGrnBold + "  + " + cWhtBold + p + cReset)
-	}
+	// ---- ถาม PKI (interaction ก่อน progress) ----
+	pkiWorkFn := openvpnAskPKI(r)
 
-	// ---- init PKI (CA + server cert + ta.key) ----
+	// ---- progress ----
+	clearScreen()
+	paintTitleBar("              ติดตั้ง OPENVPN               ")
 	fmt.Println()
+
+	pkiLabel := "เริ่มต้น PKI (CA + cert + ta.key)"
 	if pki.IsInitialized() {
-		fmt.Println(cYelBold + "  PKI มีอยู่แล้ว ข้ามขั้นตอนนี้" + cReset)
-	} else {
-		pkiRes, pkiErr := openvpnSetupPKI(r)
-		if pkiErr != nil {
-			fmt.Println(cRedBold + "[ผิดพลาด] PKI: " + cYelBold + pkiErr.Error() + cReset)
-			waitEnter(r)
-			return nil
-		}
-		for _, p := range pkiRes.Written {
-			fmt.Println(cGrnBold + "  + " + cWhtBold + p + cReset)
-		}
+		pkiLabel = "PKI มีอยู่แล้ว (ข้าม)"
 	}
 
-	// ---- เขียน server.conf ด้วยค่าจริง ----
-	if err := pki.WriteServerConf(port, proto, dnsChoice, ipLine); err != nil {
-		fmt.Println(cRedBold + "[ผิดพลาด] server.conf: " + cYelBold + err.Error() + cReset)
-		waitEnter(r)
-		return nil
-	}
-	fmt.Println(cGrnBold + "  + " + cWhtBold + "/etc/openvpn/server.conf" + cReset)
-
-	// ---- IP forwarding + iptables SNAT (mirrors v1 conexao lines 1358-1384) ----
-	setupNetworking(port, proto, ipLine)
-	fmt.Println(cGrnBold + "  + " + cWhtBold + "IP forwarding + iptables SNAT" + cReset)
-
-	// ---- start ----
-	_ = service.Enable(svc)
-	if err := service.Start(svc); err != nil {
-		fmt.Println(cRedBold + "[ผิดพลาด] เริ่ม OPENVPN ไม่สำเร็จ: " + cYelBold + err.Error() + cReset)
-		waitEnter(r)
-		return nil
-	}
-	// Retry for up to 4 seconds (OpenVPN can take a moment to bind the port).
 	var listening bool
-	for i := 0; i < 8; i++ {
-		time.Sleep(500 * time.Millisecond)
-		ok, _ := service.ListenStatus(port, proto)
-		if ok {
-			listening = true
-			break
-		}
+	steps := []progress.Step{
+		{Label: "แตกไฟล์ binary + unit", Work: func() error {
+			_, err := service.InstallService(svc)
+			return err
+		}},
+		{Label: pkiLabel, Work: pkiWorkFn},
+		{Label: "เขียน server.conf", Work: func() error {
+			return pki.WriteServerConf(port, proto, dnsChoice, ipLine)
+		}},
+		{Label: "ตั้งค่าเครือข่าย (IP forward + SNAT)", Work: func() error {
+			setupNetworking(port, proto, ipLine)
+			return nil
+		}},
+		{Label: "เริ่ม OPENVPN", Work: func() error {
+			_ = service.Enable(svc)
+			if err := service.Start(svc); err != nil {
+				return err
+			}
+			for i := 0; i < 8; i++ {
+				time.Sleep(500 * time.Millisecond)
+				if ok, _ := service.ListenStatus(port, proto); ok {
+					listening = true
+					break
+				}
+			}
+			return nil
+		}},
 	}
+	if err := progress.Run(steps); err != nil {
+		fmt.Println("\n" + cRedBold + "[ผิดพลาด] " + cYelBold + err.Error() + cReset)
+		waitEnter(r)
+		return nil
+	}
+
 	fmt.Println()
 	if listening {
 		fmt.Println(cGrnBold + "ติดตั้ง OPENVPN สำเร็จแล้ว !" + cYelBold + " พอร์ต: " + cWhtBold + strconv.Itoa(port) + cReset)
 	} else {
-		fmt.Println(cRedBold + "[ผิดพลาด]" + cYelBold +
-			" OPENVPN เริ่มทำงานไม่สำเร็จ: บริการไม่ทำงานหลังติดตั้ง — ตรวจสอบ journalctl -u " + svc.UnitName + cReset)
+		fmt.Println(cRedBold + "[ผิดพลาด]" + cYelBold + " OPENVPN เริ่มทำงานไม่สำเร็จ — ตรวจสอบ journalctl -u " + svc.UnitName + cReset)
 	}
 	waitEnter(r)
 	return nil
@@ -1098,9 +1103,14 @@ func setupNetworking(port int, proto, serverIP string) {
 	}
 }
 
-// openvpnSetupPKI asks whether to use the embedded CA from git or generate a
-// new custom CA, then initializes the PKI accordingly.
-func openvpnSetupPKI(r *bufio.Reader) (pki.InitResult, error) {
+// openvpnAskPKI shows the PKI source menu (requires user input) and returns
+// a work function that runs the actual generation without further interaction.
+// Returns a no-op if PKI is already initialized.
+func openvpnAskPKI(r *bufio.Reader) func() error {
+	if pki.IsInitialized() {
+		return func() error { return nil }
+	}
+
 	clearScreen()
 	printSep()
 	fmt.Println(cGrnBold + " HEXPLUS — ตั้งค่า PKI" + cReset)
@@ -1114,36 +1124,41 @@ func openvpnSetupPKI(r *bufio.Reader) (pki.InitResult, error) {
 	choice := strings.TrimSpace(line)
 
 	if choice == "2" {
-		return openvpnSetupPKICustom(r)
+		opts := openvpnAskPKICustom(r)
+		return func() error {
+			_, err := pki.Init(opts)
+			return err
+		}
 	}
 
-	// Option 1: load embedded CA from assets.
+	// Option 1: load embedded CA bytes now (before progress starts).
 	pkiFS := assets.PKI()
-	caCert, err := fs.ReadFile(pkiFS, "ca.crt")
-	if err != nil {
-		return pki.InitResult{}, fmt.Errorf("อ่าน embedded ca.crt: %w", err)
+	caCert, errCA := fs.ReadFile(pkiFS, "ca.crt")
+	caKey, errKey := fs.ReadFile(pkiFS, "ca.key")
+	taKey, errTA := fs.ReadFile(pkiFS, "ta.key")
+	return func() error {
+		if errCA != nil {
+			return fmt.Errorf("อ่าน embedded ca.crt: %w", errCA)
+		}
+		if errKey != nil {
+			return fmt.Errorf("อ่าน embedded ca.key: %w", errKey)
+		}
+		if errTA != nil {
+			return fmt.Errorf("อ่าน embedded ta.key: %w", errTA)
+		}
+		_, err := pki.InstallWithCA(caCert, caKey, taKey, "", true)
+		return err
 	}
-	caKey, err := fs.ReadFile(pkiFS, "ca.key")
-	if err != nil {
-		return pki.InitResult{}, fmt.Errorf("อ่าน embedded ca.key: %w", err)
-	}
-	taKey, err := fs.ReadFile(pkiFS, "ta.key")
-	if err != nil {
-		return pki.InitResult{}, fmt.Errorf("อ่าน embedded ta.key: %w", err)
-	}
-	fmt.Println()
-	fmt.Println(cGrnBold + "กำลังติดตั้ง CA จาก git..." + cReset)
-	return pki.InstallWithCA(caCert, caKey, taKey, "", true)
 }
 
-// openvpnSetupPKICustom asks for CN, Server CN, org, and validity then
-// generates a fresh CA.
-func openvpnSetupPKICustom(r *bufio.Reader) (pki.InitResult, error) {
+// openvpnAskPKICustom collects custom CA parameters from the user and returns
+// InitOptions. The actual generation happens later inside progress.Run.
+func openvpnAskPKICustom(r *bufio.Reader) pki.InitOptions {
 	fmt.Println()
 	fmt.Println(cGrnBold + "— สร้าง CA ใหม่ —" + cReset)
 
 	readField := func(label, example, def string) string {
-		fmt.Printf("%s%s %s(ตัวอย่าง: %s)%s [กด Enter = %s]: ",
+		fmt.Printf("%s%s %s(ตัวอย่าง: %s)%s [Enter = %s]: ",
 			cYelBold, label, cRedBold, example, cWhtBold, def)
 		line, _ := r.ReadString('\n')
 		v := strings.TrimSpace(line)
@@ -1162,15 +1177,13 @@ func openvpnSetupPKICustom(r *bufio.Reader) (pki.InitResult, error) {
 		years = n
 	}
 
-	fmt.Println()
-	fmt.Println(cGrnBold + "กำลังสร้าง PKI (CA, cert, ta.key)..." + cReset)
-	return pki.Init(pki.InitOptions{
-		CACommonName:    caCN,
+	return pki.InitOptions{
+		CACommonName:     caCN,
 		ServerCommonName: serverCN,
-		Org:             org,
-		CAValidityYears: years,
-		Force:           true,
-	})
+		Org:              org,
+		CAValidityYears:  years,
+		Force:            true,
+	}
 }
 
 // cleanupOpenVPN removes everything setupNetworking wrote and deletes
