@@ -27,7 +27,7 @@ import (
 )
 
 // runConexao paints the sub-menu and dispatches. Loops until the user
-// picks 0 (back).
+// picks 09 (back) or 00 (exit).
 func runConexao(r *bufio.Reader) error {
 	for {
 		clearScreen()
@@ -39,27 +39,37 @@ func runConexao(r *bufio.Reader) error {
 		}
 		switch choice {
 		case "0", "00":
-			return nil
-		case "1":
-			if err := serviceMenu(r, "openvpn"); err != nil {
+			os.Exit(0)
+		case "1", "01":
+			if err := opensshMenu(r); err != nil {
 				fmt.Println(cRedBold + "[ผิดพลาด] " + cYelBold + err.Error() + cReset)
 				waitEnter(r)
 			}
-		case "2":
+		case "2", "02":
 			if err := serviceMenu(r, "squid"); err != nil {
 				fmt.Println(cRedBold + "[ผิดพลาด] " + cYelBold + err.Error() + cReset)
 				waitEnter(r)
 			}
-		case "3":
+		case "3", "03":
 			if err := serviceMenu(r, "dropbear"); err != nil {
 				fmt.Println(cRedBold + "[ผิดพลาด] " + cYelBold + err.Error() + cReset)
 				waitEnter(r)
 			}
-		case "4":
+		case "4", "04":
+			if err := serviceMenu(r, "openvpn"); err != nil {
+				fmt.Println(cRedBold + "[ผิดพลาด] " + cYelBold + err.Error() + cReset)
+				waitEnter(r)
+			}
+		case "5", "05":
 			if err := runProxies(r); err != nil {
 				fmt.Println(cRedBold + "[ผิดพลาด] " + cYelBold + err.Error() + cReset)
 				waitEnter(r)
 			}
+		case "6", "06", "7", "07", "8", "08":
+			fmt.Println("\n" + cYelBold + "ฟีเจอร์นี้ยังไม่รองรับในเวอร์ชันนี้" + cReset)
+			waitEnter(r)
+		case "9", "09":
+			return nil
 		default:
 			fmt.Println("\n" + cRedBold + "[ผิดพลาด]" + cYelBold + " ตัวเลือกไม่ถูกต้อง" + cReset)
 			waitEnter(r)
@@ -68,8 +78,33 @@ func runConexao(r *bufio.Reader) error {
 }
 
 func paintConexaoHeader() {
-	printSep()
-	fmt.Println("\033[44;1;37m            โหมดฟังชั่น (จัดการบริการ)            \033[0m")
+	paintTitleBar("           โหมดฟังชั่นเพิ่มเติม             ")
+	fmt.Println()
+	// Show running services with ports (mirrors v1 conexao top-of-screen block)
+	if isSSHActive() {
+		fmt.Printf("%sบริการ: %sOPENSSH %sพอร์ต: %s%d%s\n",
+			cWhtBold, cYelBold, cWhtBold, cCyanBold, readSSHPort(), cReset)
+	}
+	for _, pair := range []struct{ label, key string }{
+		{"OPENVPN", "openvpn"},
+		{"DROPBEAR", "dropbear"},
+		{"SQUID PROXY", "squid"},
+	} {
+		svc, ok := service.ByName(pair.key)
+		if !ok {
+			continue
+		}
+		st, _ := service.Status(svc)
+		if st.ActiveState != "active" {
+			continue
+		}
+		port, _ := readPersistedPort(svc)
+		if port == 0 {
+			port = svc.Port
+		}
+		fmt.Printf("%sบริการ: %s%s %sพอร์ต: %s%d%s\n",
+			cWhtBold, cYelBold, pair.label, cWhtBold, cCyanBold, port, cReset)
+	}
 	printSep()
 }
 
@@ -80,45 +115,159 @@ func paintConexaoMenu() {
 		stateOf[s.Service.Name] = s
 	}
 
-	items := []struct {
-		idx  string
-		name string
-		key  string
-	}{
-		{"01", "OPENVPN", "openvpn"},
-		{"02", "SQUID", "squid"},
+	items := []struct{ idx, name, key string }{
+		{"01", "OPENSSH", "ssh"},
+		{"02", "SQUID PROXY", "squid"},
 		{"03", "DROPBEAR", "dropbear"},
-		{"04", "SOCKS PROXY", ""},
+		{"04", "OPENVPN", "openvpn"},
+		{"05", "PROXY SOCKS", "proxy"},
+		{"06", "SSL TUNNEL", ""},
+		{"07", "SSLH MULTIPLEX", ""},
+		{"08", "CHISEL", ""},
 	}
+	fmt.Println()
 	for _, it := range items {
-		marker := markerOff()
-		statusText := cRedBold + "ยังไม่ติดตั้ง"
-		if it.key != "" {
-			st := stateOf[it.key]
-			if !st.UnitExists {
-				marker = markerOff()
-				statusText = cRedBold + "ยังไม่ติดตั้ง"
-			} else if st.ActiveState == "active" {
+		var marker string
+		switch it.key {
+		case "":
+			marker = markerOff()
+		case "ssh":
+			if isSSHActive() {
 				marker = markerOn()
-				statusText = cGrnBold + "ทำงาน"
 			} else {
-				marker = cYelBold + "◐ " + cReset
-				statusText = cYelBold + "ติดตั้งแล้ว ปิดอยู่"
+				marker = markerOff()
+			}
+		case "proxy":
+			if isAnyProxyActive() {
+				marker = markerOn()
+			} else {
+				marker = markerOff()
+			}
+		default:
+			if stateOf[it.key].ActiveState == "active" {
+				marker = markerOn()
+			} else {
+				marker = markerOff()
 			}
 		}
-		if it.key == "" {
-			marker = cWhtBold + "› " + cReset
-			statusText = cWhtBold + "(จัดการ proxies)"
-		}
-		fmt.Printf("%s[%s%s%s] %s• %s%-15s %s %s%s\n",
+		fmt.Printf("%s[%s%s%s] %s• %s%-16s%s%s\n",
 			cRedBold, cCyanBold, it.idx, cRedBold,
-			cWhtBold, cYelBold, it.name, marker, statusText, cReset)
+			cWhtBold, cYelBold, it.name, marker, cReset)
 	}
-	fmt.Printf("%s[%s00%s] %s• %sย้อนกลับ%s\n",
+	fmt.Printf("%s[%s09%s] %s• %sย้อนกลับ <<<%s\n",
+		cRedBold, cCyanBold, cRedBold, cWhtBold, cYelBold, cReset)
+	fmt.Printf("%s[%s00%s] %s• %sออก <<<%s\n",
 		cRedBold, cCyanBold, cRedBold, cWhtBold, cYelBold, cReset)
 	fmt.Println()
 	printSep()
 	fmt.Println()
+}
+
+// readSSHPort reads the configured port from sshd_config (default 22).
+func readSSHPort() int {
+	data, err := os.ReadFile("/etc/ssh/sshd_config")
+	if err != nil {
+		return 22
+	}
+	m := regexp.MustCompile(`(?m)^\s*Port\s+(\d+)`).FindSubmatch(data)
+	if len(m) < 2 {
+		return 22
+	}
+	port, _ := strconv.Atoi(string(m[1]))
+	if port == 0 {
+		return 22
+	}
+	return port
+}
+
+// isSSHActive returns true when sshd is running under any common unit name.
+func isSSHActive() bool {
+	for _, unit := range []string{"ssh", "sshd", "openssh-server"} {
+		if exec.Command("systemctl", "is-active", "--quiet", unit).Run() == nil {
+			return true
+		}
+	}
+	return false
+}
+
+// isAnyProxyActive returns true when at least one hexplus-proxy-* unit is active.
+func isAnyProxyActive() bool {
+	out, err := exec.Command("systemctl", "list-units", "--state=active",
+		"--no-legend", "hexplus-proxy-*.service").Output()
+	return err == nil && len(bytes.TrimSpace(out)) > 0
+}
+
+// opensshMenu: status + port-change sub-menu for OpenSSH.
+func opensshMenu(r *bufio.Reader) error {
+	clearScreen()
+	paintTitleBar("            จัดการ OPENSSH           ")
+	port := readSSHPort()
+	status := cRedBold + "หยุด" + cReset
+	if isSSHActive() {
+		status = cGrnBold + "ทำงาน" + cReset
+	}
+	fmt.Println()
+	fmt.Printf("%sสถานะ: %s\n", cWhtBold, status)
+	fmt.Printf("%sพอร์ต: %s%d%s\n", cWhtBold, cYelBold, port, cReset)
+	fmt.Println()
+	paintOptions([][2]string{
+		{"1", "เปลี่ยนพอร์ต SSH"},
+		{"0", "ย้อนกลับ"},
+	})
+	fmt.Println()
+	printSep()
+	fmt.Println()
+	choice, err := menuPrompt(r)
+	if err != nil {
+		return err
+	}
+	if choice == "1" || choice == "01" {
+		return changeSSHPort(r)
+	}
+	return nil
+}
+
+// changeSSHPort rewrites Port in sshd_config and restarts the daemon.
+func changeSSHPort(r *bufio.Reader) error {
+	clearScreen()
+	paintTitleBar("          เปลี่ยนพอร์ต OPENSSH          ")
+	current := readSSHPort()
+	fmt.Printf("\n%sพอร์ตปัจจุบัน: %s%d%s\n\n", cWhtBold, cYelBold, current, cReset)
+	fmt.Print(cGrnBold + "พอร์ตใหม่ (1-65535, 0=ยกเลิก)" + cYelBold + ": " + cReset)
+	line, err := r.ReadString('\n')
+	if err != nil {
+		return err
+	}
+	in := strings.TrimSpace(line)
+	if in == "" || in == "0" {
+		return nil
+	}
+	newPort, convErr := strconv.Atoi(in)
+	if convErr != nil || newPort < 1 || newPort > 65535 {
+		fmt.Println(cRedBold + "[ผิดพลาด] พอร์ตไม่ถูกต้อง" + cReset)
+		waitEnter(r)
+		return nil
+	}
+	data, rdErr := os.ReadFile("/etc/ssh/sshd_config")
+	if rdErr != nil {
+		return fmt.Errorf("อ่าน sshd_config ไม่ได้: %w", rdErr)
+	}
+	re := regexp.MustCompile(`(?m)^#?\s*Port\s+\d+`)
+	newConf := re.ReplaceAllString(string(data), fmt.Sprintf("Port %d", newPort))
+	if string(data) == newConf {
+		newConf = strings.TrimRight(newConf, "\n") + fmt.Sprintf("\nPort %d\n", newPort)
+	}
+	if err := os.WriteFile("/etc/ssh/sshd_config", []byte(newConf), 0o644); err != nil {
+		return fmt.Errorf("เขียน sshd_config ไม่ได้: %w", err)
+	}
+	for _, unit := range []string{"ssh", "sshd", "openssh-server"} {
+		if exec.Command("systemctl", "restart", unit).Run() == nil {
+			break
+		}
+	}
+	fmt.Printf("\n%sเปลี่ยนพอร์ต SSH เป็น %d สำเร็จ%s\n", cGrnBold, newPort, cReset)
+	waitEnter(r)
+	return nil
 }
 
 // serviceMenu routes to the per-service sub-menus that mirror v1's

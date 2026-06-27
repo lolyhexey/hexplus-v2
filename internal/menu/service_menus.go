@@ -189,6 +189,41 @@ func squidInstall(r *bufio.Reader, svc service.Service) error {
 	clearScreen()
 	paintTitleBar("              ติดตั้งพร็อกซี่                ")
 	fmt.Println()
+
+	// Confirm server IP (v1 conexao does the same check).
+	ip := defaultServerIP()
+	if ip == "" {
+		ip = "ไม่สามารถตรวจสอบ IP ได้"
+	}
+	fmt.Printf("%sยืนยัน IP ของคุณเพื่อดำเนินการต่อ: %s%s%s\n\n",
+		cWhtBold, cYelBold, ip, cReset)
+
+	// Ask for port.
+	fmt.Printf("%sกรุณาใส่พอร์ตที่คุณต้องการ ?%s\n\n", cGrnBold, cReset)
+	fmt.Printf("%s[!] พอร์ตพร็อกซี่ตัวอย่าง %sEX: 80 8080%s\n\n", cYelBold, cWhtBold, cReset)
+	fmt.Print(cGrnBold + "กรุณาใส่พอร์ต" + cYelBold + ": " + cReset)
+	portLine, _ := r.ReadString('\n')
+	portStr := strings.TrimSpace(portLine)
+	port, convErr := strconv.Atoi(portStr)
+	if convErr != nil || port < 1 || port > 65535 {
+		fmt.Println(cRedBold + "[ผิดพลาด] พอร์ตไม่ถูกต้อง" + cReset)
+		waitEnter(r)
+		return nil
+	}
+
+	// Choose Squid version (v1 had 3.3.X vs 3.5.X from apt; v2 ships 3.3.8).
+	fmt.Println()
+	paintOptions([][2]string{
+		{"1", "พร็อกซี่เวอร์ชั่น 3.3.X"},
+		{"2", "พร็อกซี่เวอร์ชั่น 3.5.X"},
+	})
+	fmt.Println()
+	fmt.Print(cGrnBold + "เลือกเวอร์ชั่น" + cRedBold + "?" + cWhtBold + " : " + cReset)
+	verLine, _ := r.ReadString('\n')
+	_ = strings.TrimSpace(verLine) // both choices use the same embedded binary
+
+	// Install binary + unit files.
+	fmt.Println(cGrnBold + "\nกำลังติดตั้งพร็อกซี่ ..." + cReset)
 	res, err := service.InstallService(svc)
 	if err != nil {
 		fmt.Println(cRedBold + "[ผิดพลาด] " + cYelBold + err.Error() + cReset)
@@ -205,7 +240,15 @@ func squidInstall(r *bufio.Reader, svc service.Service) error {
 		fmt.Println(cGrnBold + "  + " + cWhtBold + p + cReset)
 	}
 
-	// v1 conexao: auto-start + verify via netstat.
+	// Rewrite squid.conf http_port to the user's chosen port.
+	if confData, readErr := os.ReadFile("/etc/squid/squid.conf"); readErr == nil {
+		_ = rewriteConfPort("/etc/squid/squid.conf",
+			`(?m)^\s*http_port\s+\d+\b`,
+			fmt.Sprintf("http_port %d", port))
+		_ = confData
+	}
+
+	// Auto-start + verify port is listening (v1 conexao behaviour).
 	_ = service.Enable(svc)
 	if err := service.Start(svc); err != nil {
 		fmt.Println("\n" + cRedBold + "[ผิดพลาด]" + cYelBold +
@@ -215,7 +258,7 @@ func squidInstall(r *bufio.Reader, svc service.Service) error {
 		return nil
 	}
 	time.Sleep(700 * time.Millisecond)
-	listening, _ := service.ListenStatus(svc.Port, svc.PortProto)
+	listening, _ := service.ListenStatus(port, svc.PortProto)
 	if listening {
 		fmt.Println("\n" + cGrnBold + "ติดตั้งพร็อกซี่สำเร็จแล้ว!" + cReset)
 	} else {

@@ -1000,7 +1000,7 @@ func runListUsers(r *bufio.Reader) error {
 		tUser++
 
 		// password from /etc/SSHPlus/senha/<name> (v1 style)
-		pass := "Null"
+		pass := "-"
 		if b, err := os.ReadFile("/etc/SSHPlus/senha/" + rec.Name); err == nil {
 			if s := strings.TrimSpace(string(b)); s != "" {
 				pass = s

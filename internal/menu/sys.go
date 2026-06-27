@@ -77,25 +77,37 @@ func runSpeedTest(r *bufio.Reader) error {
 		pingMs = fmt.Sprintf("%.0f ms", float64(time.Since(t0).Microseconds())/1000.0)
 	}
 
-	// Throughput: 10 MB blob from speed.hetzner.de.
+	// Throughput: try multiple 10 MB sources in order (first one that responds wins).
 	fmt.Println(cGrnBold + "กำลังวัด DOWNLOAD ..." + cReset)
 	mbps := ""
+	downloadURLs := []string{
+		"http://speed.hetzner.de/10MB.bin",
+		"http://speedtest.tele2.net/10MB.zip",
+		"http://ipv4.download.thinkbroadband.com/10MB.zip",
+		"http://cachefly.cachefly.net/10mb.test",
+	}
 	t1 := time.Now()
-	resp2, err := client.Get("http://speed.hetzner.de/10MB.bin")
-	if err != nil {
-		mbps = "ผิดพลาด: " + err.Error()
-	} else {
+	for _, url := range downloadURLs {
+		t1 = time.Now()
+		resp2, dlErr := client.Get(url)
+		if dlErr != nil {
+			continue
+		}
 		n, copyErr := io.Copy(io.Discard, resp2.Body)
 		resp2.Body.Close()
 		dur := time.Since(t1).Seconds()
-		if copyErr != nil {
-			mbps = "ผิดพลาด: " + copyErr.Error()
-		} else if dur > 0 && n > 0 {
-			// bytes -> bits -> megabits
+		if copyErr != nil || n == 0 {
+			continue
+		}
+		if dur > 0 {
 			mbps = fmt.Sprintf("%.2f Mbps", float64(n)*8/(dur*1_000_000))
 		} else {
 			mbps = "ไม่สามารถวัดได้"
 		}
+		break
+	}
+	if mbps == "" {
+		mbps = "ผิดพลาด: ไม่สามารถเชื่อมต่อแหล่งทดสอบได้"
 	}
 
 	printSep()
