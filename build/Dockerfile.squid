@@ -225,7 +225,9 @@ RUN make -j"$(nproc)" LDFLAGS="-static -L/opt/ossl10/lib" \
 
 RUN mkdir -p /out \
     && cp src/squid /out/squid \
-    && cp mime.conf /out/mime.conf \
+    && MIME=$(find . -maxdepth 3 -name 'mime.conf' -not -path './debian/*' | head -1) \
+    && [ -n "$MIME" ] || { echo "ERROR: mime.conf not found in source tree"; find . -name 'mime.conf*' | head -10; exit 1; } \
+    && cp "$MIME" /out/mime.conf \
     && strip /out/squid \
     && /out/squid -v 2>&1 | head -5 \
     && echo "---" \
