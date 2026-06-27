@@ -240,13 +240,9 @@ func squidInstall(r *bufio.Reader, svc service.Service) error {
 		fmt.Println(cGrnBold + "  + " + cWhtBold + p + cReset)
 	}
 
-	// Rewrite squid.conf http_port to the user's chosen port.
-	if confData, readErr := os.ReadFile("/etc/squid/squid.conf"); readErr == nil {
-		_ = rewriteConfPort("/etc/squid/squid.conf",
-			`(?m)^\s*http_port\s+\d+\b`,
-			fmt.Sprintf("http_port %d", port))
-		_ = confData
-	}
+	// Write the complete v1-style squid.conf: no "deny CONNECT !SSL_ports"
+	// rule so HTTP Injector can tunnel SSH (port 22) through Squid.
+	_ = os.WriteFile("/etc/squid/squid.conf", []byte(buildSquidConf(port, ip)), 0o644)
 
 	// Auto-start + verify port is listening (v1 conexao behaviour).
 	_ = service.Enable(svc)
@@ -392,6 +388,59 @@ func squidRemovePort(r *bufio.Reader, svc service.Service) error {
 	fmt.Println("\n" + cGrnBold + "ลบพอร์ตสำเร็จเเล้ว!" + cReset)
 	waitEnter(r)
 	return nil
+}
+
+// buildSquidConf returns a complete squid.conf matching v1 conexao's template.
+// Key difference from the Squid default: NO "http_access deny CONNECT !SSL_ports"
+// rule, so HTTP Injector can CONNECT to this server's SSH port (22) through
+// Squid to establish an SSH tunnel. The "acl SSH dst" ACL allows only CONNECT
+// requests destined for this server's own IP — not an open proxy.
+func buildSquidConf(port int, serverIP string) string {
+	sshACL := ""
+	if serverIP != "" {
+		sshACL = "acl SSH dst " + serverIP + "/32\n" +
+			"acl SSH dst 127.0.0.1/32\n"
+	}
+	sshAllow := ""
+	if serverIP != "" {
+		sshAllow = "http_access allow SSH\n"
+	}
+	return fmt.Sprintf(`http_port %d
+acl localhost src 127.0.0.1/32 ::1
+acl to_localhost dst 127.0.0.0/8 0.0.0.0/32 ::1
+acl localnet src 10.0.0.0/8
+acl localnet src 172.16.0.0/12
+acl localnet src 192.168.0.0/16
+acl SSL_ports port 443
+acl Safe_ports port 80
+acl Safe_ports port 21
+acl Safe_ports port 443
+acl Safe_ports port 70
+acl Safe_ports port 210
+acl Safe_ports port 1025-65535
+acl Safe_ports port 280
+acl Safe_ports port 488
+acl Safe_ports port 591
+acl Safe_ports port 777
+acl CONNECT method CONNECT
+%s%shttp_access allow localnet
+http_access allow localhost
+http_access deny all
+visible_hostname HEXPLUS
+via off
+forwarded_for off
+pipeline_prefetch off
+cache deny all
+unlinkd_program /bin/true
+access_log none
+cache_log /dev/null
+cache_effective_user nobody
+icon_directory /var/spool/squid/icons
+error_directory /var/spool/squid/errors
+logfile_daemon /usr/lib/squid/log_file_daemon
+pid_filename /var/spool/squid/squid.pid
+coredump_dir /var/spool/squid
+`, port, sshACL, sshAllow)
 }
 
 // =====================================================================
