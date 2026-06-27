@@ -54,6 +54,7 @@ ecdh-curve secp384r1
 
 topology subnet
 server 10.8.0.0 255.255.0.0
+ifconfig-pool-persist ipp.txt
 
 push "redirect-gateway def1"
 push "dhcp-option DNS 8.8.8.8"
@@ -169,6 +170,7 @@ ecdh-curve secp384r1
 
 topology subnet
 server 10.8.0.0 255.255.0.0
+ifconfig-pool-persist ipp.txt
 
 push "redirect-gateway def1"%s
 

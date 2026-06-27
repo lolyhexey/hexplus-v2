@@ -680,14 +680,37 @@ func setupNetworking(port int, proto, serverIP string) {
 			"-m", "state", "--state", "RELATED,ESTABLISHED", "-j", "ACCEPT").Run()
 	}
 
-	// 5. Persist iptables rules across reboots via rc.local.
+	// 5. Disable IPv6 (v1 conexao does this to prevent leaks).
+	_ = os.WriteFile("/proc/sys/net/ipv6/conf/all/disable_ipv6", []byte("1\n"), 0o644)
+
+	// 6. Block outbound SMTP/POP3 — VPS providers penalise spam relays.
+	// v1 adds these in rc.local; we apply them immediately too.
+	for _, args := range [][]string{
+		{"-A", "INPUT", "-p", "tcp", "--dport", "25", "-j", "DROP"},
+		{"-A", "INPUT", "-p", "tcp", "--dport", "110", "-j", "DROP"},
+		{"-A", "OUTPUT", "-p", "tcp", "--dport", "25", "-j", "DROP"},
+		{"-A", "OUTPUT", "-p", "tcp", "--dport", "110", "-j", "DROP"},
+		{"-A", "FORWARD", "-p", "tcp", "--dport", "25", "-j", "DROP"},
+		{"-A", "FORWARD", "-p", "tcp", "--dport", "110", "-j", "DROP"},
+	} {
+		exec.Command("iptables", args...).Run()
+	}
+
+	// 7. Persist all rules across reboots via rc.local.
 	rclocal := "/etc/rc.local"
 	if _, err := os.Stat(rclocal); os.IsNotExist(err) {
 		_ = os.WriteFile(rclocal, []byte("#!/bin/sh -e\nexit 0\n"), 0o755)
 	}
 	rules := []string{
 		"echo 1 > /proc/sys/net/ipv4/ip_forward",
+		"echo 1 > /proc/sys/net/ipv6/conf/all/disable_ipv6",
 		fmt.Sprintf("iptables -t nat -A POSTROUTING -s 10.8.0.0/16 -j SNAT --to %s", serverIP),
+		"iptables -A INPUT -p tcp --dport 25 -j DROP",
+		"iptables -A INPUT -p tcp --dport 110 -j DROP",
+		"iptables -A OUTPUT -p tcp --dport 25 -j DROP",
+		"iptables -A OUTPUT -p tcp --dport 110 -j DROP",
+		"iptables -A FORWARD -p tcp --dport 25 -j DROP",
+		"iptables -A FORWARD -p tcp --dport 110 -j DROP",
 	}
 	if raw, err := os.ReadFile(rclocal); err == nil {
 		content := string(raw)
