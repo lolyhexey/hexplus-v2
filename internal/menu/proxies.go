@@ -26,6 +26,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/lolyhexey/hexplus/internal/progress"
 	"github.com/lolyhexey/hexplus/internal/proxy"
 	"github.com/lolyhexey/hexplus/internal/service"
 )
@@ -187,13 +188,19 @@ func proxyToggle(r *bufio.Reader, db *proxy.DB, s *proxySlot) {
 		// --- TURN OFF ---
 		fmt.Println("\033[41;1;37m             " + s.label + "              \033[0m")
 		fmt.Println()
-		fmt.Println(cGrnBold + "กำลังปิด " + s.label + cYelBold)
-		_ = systemctlRun("disable", "--now", cfg.UnitName())
-		time.Sleep(500 * time.Millisecond)
-		_, _, _, _ = proxy.RemoveUnit(cfg)
-		delete(db.Proxies, s.key)
-		_ = db.Save()
-		fmt.Println(cGrnBold + "ปิด " + s.label + " สำเร็จแล้ว!" + cReset)
+		unitName := cfg.UnitName()
+		_ = progress.Run([]progress.Step{
+			{Label: "ปิด + ปิดใช้งาน " + s.label, Work: func() error {
+				return systemctlRun("disable", "--now", unitName)
+			}},
+			{Label: "ลบ unit file + อัปเดต DB", Work: func() error {
+				time.Sleep(300 * time.Millisecond)
+				_, _, _, _ = proxy.RemoveUnit(cfg)
+				delete(db.Proxies, s.key)
+				return db.Save()
+			}},
+		})
+		fmt.Println("\n" + cGrnBold + "ปิด " + s.label + " สำเร็จแล้ว!" + cReset)
 		time.Sleep(2 * time.Second)
 	} else {
 		// --- TURN ON ---
@@ -294,36 +301,47 @@ func proxyInstall(r *bufio.Reader, db *proxy.DB, s *proxySlot) error {
 		return err
 	}
 
-	db.Proxies[s.key] = cfg
-	if err := db.Save(); err != nil {
-		return err
-	}
-	_, _, reloadErr, err := proxy.WriteUnit(cfg)
-	if err != nil {
-		return err
-	}
-	if reloadErr != nil {
-		fmt.Println(cYelBold + "  คำเตือน: daemon-reload: " + reloadErr.Error() + cReset)
-	}
-	unitName := cfg.UnitName()
 	fmt.Println()
-	fmt.Println(cGrnBold + "กำลังเริ่ม " + s.label + cYelBold)
-	if err := systemctlRun("enable", "--now", unitName); err != nil {
-		fmt.Println(cRedBold + "[ผิดพลาด]" + cYelBold +
-			" " + s.label + " เริ่มทำงานไม่สำเร็จ: " + err.Error() + cReset)
+
+	var up bool
+	unitName := cfg.UnitName()
+	if err := progress.Run([]progress.Step{
+		{Label: "บันทึก config + เขียน unit file", Work: func() error {
+			db.Proxies[s.key] = cfg
+			if err := db.Save(); err != nil {
+				return err
+			}
+			_, _, reloadErr, err := proxy.WriteUnit(cfg)
+			if err != nil {
+				return err
+			}
+			if reloadErr != nil {
+				fmt.Fprintf(os.Stderr, "\n  คำเตือน: daemon-reload: %v\n", reloadErr)
+			}
+			return nil
+		}},
+		{Label: "เริ่ม " + s.label, Work: func() error {
+			if err := systemctlRun("enable", "--now", unitName); err != nil {
+				return err
+			}
+			for i := 0; i < 8; i++ {
+				time.Sleep(500 * time.Millisecond)
+				if ok, _ := service.ListenStatus(port, "tcp"); ok {
+					up = true
+					break
+				}
+			}
+			return nil
+		}},
+	}); err != nil {
+		fmt.Println("\n" + cRedBold + "[ผิดพลาด] " + cYelBold + err.Error() + cReset)
+		time.Sleep(2 * time.Second)
 		return nil
 	}
-	// Retry up to 4s — systemctl returns before the socket is actually bound.
-	up := false
-	for i := 0; i < 8; i++ {
-		time.Sleep(500 * time.Millisecond)
-		if ok, _ := service.ListenStatus(port, "tcp"); ok {
-			up = true
-			break
-		}
-	}
+
+	fmt.Println()
 	if up {
-		fmt.Println(cGrnBold + "เปิดใช้งาน SOCKS สำเร็จแล้ว" + cReset)
+		fmt.Println(cGrnBold + "เปิดใช้งาน SOCKS สำเร็จแล้ว !" + cYelBold + " พอร์ต: " + cWhtBold + strconv.Itoa(port) + cReset)
 	} else {
 		fmt.Println(cRedBold + "[ผิดพลาด]" + cYelBold +
 			" PROXY SOCKS เริ่มทำงานไม่สำเร็จบนพอร์ต " + strconv.Itoa(port) +
@@ -432,17 +450,28 @@ func proxyChangeStatus(r *bufio.Reader, db *proxy.DB, s *proxySlot) {
 	cfg.StatusMsg = fmt.Sprintf(`<font color="%s">%s</font>`, color, text)
 	db.Proxies[s.key] = cfg
 	fmt.Println()
-	fmt.Println(cGrnBold + "กำลังเปลี่ยนสถานะ!" + cReset)
 
-	if err := db.Save(); err != nil {
-		fmt.Println(cRedBold + "[ผิดพลาด] " + err.Error() + cReset)
+	unitName := cfg.UnitName()
+	if err := progress.Run([]progress.Step{
+		{Label: "บันทึก config + เขียน unit file", Work: func() error {
+			if err := db.Save(); err != nil {
+				return err
+			}
+			_, _, _, _ = proxy.WriteUnit(cfg)
+			return nil
+		}},
+		{Label: "รีสตาร์ท " + s.label, Work: func() error {
+			err := systemctlRun("restart", unitName)
+			time.Sleep(300 * time.Millisecond)
+			return err
+		}},
+	}); err != nil {
+		fmt.Println("\n" + cRedBold + "[ผิดพลาด] " + err.Error() + cReset)
 		waitEnter(r)
 		return
 	}
-	_, _, _, _ = proxy.WriteUnit(cfg)
-	_ = systemctlRun("restart", cfg.UnitName())
-	time.Sleep(500 * time.Millisecond)
-	fmt.Println(cGrnBold + "เปลี่ยนสถานะสำเร็จแล้ว!" + cReset)
+
+	fmt.Println("\n" + cGrnBold + "เปลี่ยนสถานะสำเร็จแล้ว!" + cReset)
 	time.Sleep(2 * time.Second)
 }
 
