@@ -18,11 +18,13 @@ package menu
 import (
 	"bufio"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/lolyhexey/hexplus/internal/proxy"
 	"github.com/lolyhexey/hexplus/internal/service"
@@ -214,6 +216,11 @@ func proxyInstall(r *bufio.Reader, db *proxy.DB, s *proxySlot) error {
 	if err != nil || port < 1 || port > 65535 {
 		return fmt.Errorf("พอร์ตไม่ถูกต้อง: %q — พอร์ตต้องเป็นตัวเลข 1-65535", portStr)
 	}
+	for _, other := range db.All() {
+		if other.Port == port && other.Name != s.key {
+			return fmt.Errorf("พอร์ต %d ถูกใช้งานโดย proxy %q อยู่แล้ว", port, other.Name)
+		}
+	}
 
 	defHost := s.defHost
 	if s.key == "openvpn" {
@@ -226,6 +233,10 @@ func proxyInstall(r *bufio.Reader, db *proxy.DB, s *proxySlot) error {
 	}
 	if host == "" {
 		host = defHost
+	}
+	host = sanitizeASCII(host)
+	if _, _, err := net.SplitHostPort(host); err != nil {
+		return fmt.Errorf("DEFAULT HOST ไม่ถูกต้อง %q — ต้องเป็น host:port เช่น 127.0.0.1:22", host)
 	}
 
 	fmt.Println()
@@ -425,6 +436,18 @@ func proxyChangeStatus(r *bufio.Reader, db *proxy.DB, s *proxySlot) {
 	time.Sleep(500 * time.Millisecond)
 	fmt.Println(cGrnBold + "เปลี่ยนสถานะสำเร็จแล้ว!" + cReset)
 	time.Sleep(2 * time.Second)
+}
+
+// sanitizeASCII strips non-printable and non-ASCII characters from s.
+// Prevents garbled terminal IME bytes from corrupting DB / unit files.
+func sanitizeASCII(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		if r <= unicode.MaxASCII && unicode.IsPrint(r) {
+			b.WriteRune(r)
+		}
+	}
+	return strings.TrimSpace(b.String())
 }
 
 // detectOpenVPNHost returns the OpenVPN server's listen address for use as
