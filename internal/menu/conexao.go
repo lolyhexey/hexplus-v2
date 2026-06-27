@@ -19,10 +19,12 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/lolyhexey/hexplus/internal/proxy"
 	"github.com/lolyhexey/hexplus/internal/service"
 )
 
@@ -82,8 +84,13 @@ func paintConexaoHeader() {
 	fmt.Println()
 	// Show running services with ports (mirrors v1 conexao top-of-screen block)
 	if isSSHActive() {
-		fmt.Printf("%sบริการ: %sOPENSSH %sพอร์ต: %s%d%s\n",
-			cWhtBold, cYelBold, cWhtBold, cCyanBold, readSSHPort(), cReset)
+		sshPorts := readSSHPorts()
+		strs := make([]string, len(sshPorts))
+		for i, p := range sshPorts {
+			strs[i] = strconv.Itoa(p)
+		}
+		fmt.Printf("%sบริการ: %sOPENSSH %sพอร์ต: %s%s%s\n",
+			cWhtBold, cYelBold, cWhtBold, cCyanBold, strings.Join(strs, " "), cReset)
 	}
 	for _, pair := range []struct{ label, key string }{
 		{"OPENVPN", "openvpn"},
@@ -105,7 +112,33 @@ func paintConexaoHeader() {
 		fmt.Printf("%sบริการ: %s%s %sพอร์ต: %s%d%s\n",
 			cWhtBold, cYelBold, pair.label, cWhtBold, cCyanBold, port, cReset)
 	}
+	// Proxy SOCKS: show all active proxy ports (may be multiple)
+	if proxyPorts := activeProxyPorts(); len(proxyPorts) > 0 {
+		strs := make([]string, len(proxyPorts))
+		for i, p := range proxyPorts {
+			strs[i] = strconv.Itoa(p)
+		}
+		fmt.Printf("%sบริการ: %sPROXY SOCKS %sพอร์ต: %s%s%s\n",
+			cWhtBold, cYelBold, cWhtBold, cCyanBold, strings.Join(strs, " "), cReset)
+	}
 	printSep()
+}
+
+// activeProxyPorts returns ports of all active hexplus-proxy-* units,
+// sorted ascending. Used by paintConexaoHeader to show live proxy ports.
+func activeProxyPorts() []int {
+	db, err := proxy.Load()
+	if err != nil {
+		return nil
+	}
+	var ports []int
+	for _, cfg := range db.Proxies {
+		if exec.Command("systemctl", "is-active", "--quiet", cfg.UnitName()).Run() == nil {
+			ports = append(ports, cfg.Port)
+		}
+	}
+	sort.Ints(ports)
+	return ports
 }
 
 func paintConexaoMenu() {
@@ -163,21 +196,31 @@ func paintConexaoMenu() {
 	fmt.Println()
 }
 
-// readSSHPort reads the configured port from sshd_config (default 22).
-func readSSHPort() int {
+// readSSHPorts reads all active Port lines from sshd_config.
+// OpenSSH supports multiple Port directives; v1 uses this feature for
+// "add port" / "delete port" instead of a single replace.
+func readSSHPorts() []int {
 	data, err := os.ReadFile("/etc/ssh/sshd_config")
 	if err != nil {
-		return 22
+		return []int{22}
 	}
-	m := regexp.MustCompile(`(?m)^\s*Port\s+(\d+)`).FindSubmatch(data)
-	if len(m) < 2 {
-		return 22
+	re := regexp.MustCompile(`(?m)^\s*Port\s+(\d+)`)
+	matches := re.FindAllSubmatch(data, -1)
+	var out []int
+	for _, m := range matches {
+		if p, err := strconv.Atoi(string(m[1])); err == nil && p > 0 {
+			out = append(out, p)
+		}
 	}
-	port, _ := strconv.Atoi(string(m[1]))
-	if port == 0 {
-		return 22
+	if len(out) == 0 {
+		return []int{22}
 	}
-	return port
+	return out
+}
+
+// readSSHPort returns the first SSH port (for header display).
+func readSSHPort() int {
+	return readSSHPorts()[0]
 }
 
 // isSSHActive returns true when sshd is running under any common unit name.
@@ -197,54 +240,125 @@ func isAnyProxyActive() bool {
 	return err == nil && len(bytes.TrimSpace(out)) > 0
 }
 
-// opensshMenu: status + port-change sub-menu for OpenSSH.
+// opensshMenu mirrors v1's fun_openssh: add port / delete port.
+// OpenSSH can listen on multiple ports via multiple Port lines in sshd_config.
 func opensshMenu(r *bufio.Reader) error {
-	clearScreen()
-	paintTitleBar("            จัดการ OPENSSH           ")
-	port := readSSHPort()
-	status := cRedBold + "หยุด" + cReset
-	if isSSHActive() {
-		status = cGrnBold + "ทำงาน" + cReset
+	for {
+		clearScreen()
+		paintTitleBar("            OPENSSH           ")
+		ports := readSSHPorts()
+		portStrs := make([]string, len(ports))
+		for i, p := range ports {
+			portStrs[i] = strconv.Itoa(p)
+		}
+		fmt.Println()
+		fmt.Printf("%sพอร์ตที่ใช้งาน: %s%s%s\n\n",
+			cWhtBold, cYelBold, strings.Join(portStrs, " "), cReset)
+		paintOptions([][2]string{
+			{"1", "เพิ่มพอร์ต SSH"},
+			{"2", "ลบพอร์ต SSH"},
+			{"3", "ย้อนกลับ"},
+		})
+		fmt.Println()
+		printSep()
+		fmt.Println()
+		choice, err := menuPrompt(r)
+		if err != nil {
+			return err
+		}
+		switch choice {
+		case "1", "01":
+			if err := sshAddPort(r, ports); err != nil {
+				fmt.Println(cRedBold + "[ผิดพลาด] " + cYelBold + err.Error() + cReset)
+				waitEnter(r)
+			}
+		case "2", "02":
+			if err := sshDeletePort(r, ports); err != nil {
+				fmt.Println(cRedBold + "[ผิดพลาด] " + cYelBold + err.Error() + cReset)
+				waitEnter(r)
+			}
+		case "3", "03", "0", "00":
+			return nil
+		}
 	}
-	fmt.Println()
-	fmt.Printf("%sสถานะ: %s\n", cWhtBold, status)
-	fmt.Printf("%sพอร์ต: %s%d%s\n", cWhtBold, cYelBold, port, cReset)
-	fmt.Println()
-	paintOptions([][2]string{
-		{"1", "เปลี่ยนพอร์ต SSH"},
-		{"0", "ย้อนกลับ"},
-	})
-	fmt.Println()
-	printSep()
-	fmt.Println()
-	choice, err := menuPrompt(r)
-	if err != nil {
-		return err
-	}
-	if choice == "1" || choice == "01" {
-		return changeSSHPort(r)
-	}
-	return nil
 }
 
-// changeSSHPort rewrites Port in sshd_config and restarts the daemon.
-func changeSSHPort(r *bufio.Reader) error {
+// sshAddPort appends a new Port line to sshd_config and restarts sshd.
+func sshAddPort(r *bufio.Reader, current []int) error {
 	clearScreen()
-	paintTitleBar("          เปลี่ยนพอร์ต OPENSSH          ")
-	current := readSSHPort()
-	fmt.Printf("\n%sพอร์ตปัจจุบัน: %s%d%s\n\n", cWhtBold, cYelBold, current, cReset)
-	fmt.Print(cGrnBold + "พอร์ตใหม่ (1-65535, 0=ยกเลิก)" + cYelBold + ": " + cReset)
+	paintTitleBar("         เพิ่มพอร์ต SSH         ")
+	fmt.Println()
+	fmt.Print(cGrnBold + "พอร์ตที่ต้องการเพิ่ม" + cYelBold + ": " + cReset)
 	line, err := r.ReadString('\n')
 	if err != nil {
 		return err
 	}
-	in := strings.TrimSpace(line)
-	if in == "" || in == "0" {
-		return nil
-	}
-	newPort, convErr := strconv.Atoi(in)
+	portStr := strings.TrimSpace(line)
+	newPort, convErr := strconv.Atoi(portStr)
 	if convErr != nil || newPort < 1 || newPort > 65535 {
 		fmt.Println(cRedBold + "[ผิดพลาด] พอร์ตไม่ถูกต้อง" + cReset)
+		waitEnter(r)
+		return nil
+	}
+	for _, p := range current {
+		if p == newPort {
+			fmt.Printf("%s[ผิดพลาด] พอร์ต %d มีอยู่แล้ว%s\n", cRedBold, newPort, cReset)
+			waitEnter(r)
+			return nil
+		}
+	}
+	data, rdErr := os.ReadFile("/etc/ssh/sshd_config")
+	if rdErr != nil {
+		return fmt.Errorf("อ่าน sshd_config ไม่ได้: %w", rdErr)
+	}
+	newConf := strings.TrimRight(string(data), "\n") + fmt.Sprintf("\nPort %d\n", newPort)
+	if err := os.WriteFile("/etc/ssh/sshd_config", []byte(newConf), 0o644); err != nil {
+		return fmt.Errorf("เขียน sshd_config ไม่ได้: %w", err)
+	}
+	restartSSH()
+	// Verify the new port is listening (mirrors v1 netstat check).
+	time.Sleep(700 * time.Millisecond)
+	listening, _ := service.ListenStatus(newPort, "tcp")
+	if listening {
+		fmt.Printf("\n%sเพิ่มพอร์ต SSH %d สำเร็จ%s\n", cGrnBold, newPort, cReset)
+	} else {
+		fmt.Printf("\n%s[ผิดพลาด] เพิ่มพอร์ตไม่สำเร็จ — ตรวจสอบ journalctl -u ssh%s\n", cRedBold, cReset)
+	}
+	waitEnter(r)
+	return nil
+}
+
+// sshDeletePort removes one Port line from sshd_config and restarts sshd.
+func sshDeletePort(r *bufio.Reader, current []int) error {
+	clearScreen()
+	paintTitleBar("          ลบพอร์ต SSH          ")
+	portStrs := make([]string, len(current))
+	for i, p := range current {
+		portStrs[i] = strconv.Itoa(p)
+	}
+	fmt.Printf("\n%s[!] Default port 22 — ระวังอย่าลบพอร์ตสุดท้าย%s\n", cYelBold, cReset)
+	fmt.Printf("%sพอร์ตปัจจุบัน: %s%s%s\n\n", cWhtBold, cYelBold, strings.Join(portStrs, " "), cReset)
+	fmt.Print(cGrnBold + "พอร์ตที่ต้องการลบ" + cYelBold + ": " + cReset)
+	line, err := r.ReadString('\n')
+	if err != nil {
+		return err
+	}
+	portStr := strings.TrimSpace(line)
+	delPort, convErr := strconv.Atoi(portStr)
+	if convErr != nil || delPort < 1 {
+		fmt.Println(cRedBold + "[ผิดพลาด] พอร์ตไม่ถูกต้อง" + cReset)
+		waitEnter(r)
+		return nil
+	}
+	found := false
+	for _, p := range current {
+		if p == delPort {
+			found = true
+			break
+		}
+	}
+	if !found {
+		fmt.Printf("%s[ผิดพลาด] ไม่พบพอร์ต %d ใน sshd_config%s\n", cRedBold, delPort, cReset)
 		waitEnter(r)
 		return nil
 	}
@@ -252,22 +366,25 @@ func changeSSHPort(r *bufio.Reader) error {
 	if rdErr != nil {
 		return fmt.Errorf("อ่าน sshd_config ไม่ได้: %w", rdErr)
 	}
-	re := regexp.MustCompile(`(?m)^#?\s*Port\s+\d+`)
-	newConf := re.ReplaceAllString(string(data), fmt.Sprintf("Port %d", newPort))
-	if string(data) == newConf {
-		newConf = strings.TrimRight(newConf, "\n") + fmt.Sprintf("\nPort %d\n", newPort)
-	}
+	// Remove all "Port <delPort>" lines (sed -i "/Port $pt/d" equivalent).
+	re := regexp.MustCompile(fmt.Sprintf(`(?m)^\s*Port\s+%d\s*\n?`, delPort))
+	newConf := re.ReplaceAllString(string(data), "")
 	if err := os.WriteFile("/etc/ssh/sshd_config", []byte(newConf), 0o644); err != nil {
 		return fmt.Errorf("เขียน sshd_config ไม่ได้: %w", err)
 	}
-	for _, unit := range []string{"ssh", "sshd", "openssh-server"} {
-		if exec.Command("systemctl", "restart", unit).Run() == nil {
-			break
-		}
-	}
-	fmt.Printf("\n%sเปลี่ยนพอร์ต SSH เป็น %d สำเร็จ%s\n", cGrnBold, newPort, cReset)
+	restartSSH()
+	fmt.Printf("\n%sลบพอร์ต SSH %d สำเร็จ%s\n", cGrnBold, delPort, cReset)
 	waitEnter(r)
 	return nil
+}
+
+// restartSSH tries common systemd unit names for the SSH daemon.
+func restartSSH() {
+	for _, unit := range []string{"ssh", "sshd", "openssh-server"} {
+		if exec.Command("systemctl", "restart", unit).Run() == nil {
+			return
+		}
+	}
 }
 
 // serviceMenu routes to the per-service sub-menus that mirror v1's
