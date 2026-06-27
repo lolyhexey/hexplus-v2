@@ -927,16 +927,47 @@ func runChangePassword(r *bufio.Reader) error {
 func runCleanExpired(r *bufio.Reader) error {
 	userHeader("ลบผู้ใช้ที่หมดอายุ")
 
-	removed, err := user.CleanExpired()
-	if err != nil {
-		errLine("ลบผู้ใช้ที่หมดอายุไม่สำเร็จ: " + err.Error())
-		waitEnter(r)
-		return nil
+	fmt.Println("\033[44;1;37m ผู้ใช้          วันหมดอายุ      สถานะ              \033[0m")
+	fmt.Println()
+
+	var allRemoved []string
+	// Iterate ALL system users and check chage directly — same as v1
+	// expcleaner. user.CleanExpired() only sees the JSON DB and would miss
+	// pure v1 accounts that were created before hexplus v2 was installed.
+	for _, rec := range systemUsers() {
+		exp, daysLeft := chageExpiry(rec.Name)
+		if exp == "never" || exp == "" {
+			continue // no expiry configured — skip silently
+		}
+		var statusCol string
+		if daysLeft >= 0 {
+			statusCol = cGrnBold + "ไม่ถูกลบออก" + cReset
+		} else {
+			statusCol = cRedBold + "ถูกลบออกแล้ว" + cReset
+			// Kill active sessions before removing (v1: pkill -f $user).
+			// pkill -u removes by UID — safer than matching cmdline.
+			_ = exec.Command("pkill", "-u", rec.Name).Run()
+			if err := user.Remove(rec.Name); err == nil {
+				deleteV1Compat(rec.Name)
+				allRemoved = append(allRemoved, rec.Name)
+			}
+		}
+		fmt.Printf("%s%-15s%s%-17s%s\n",
+			cYelBold, rec.Name,
+			cWhtBold, exp,
+			statusCol)
+		fmt.Println(cBluBold + separator + cReset)
 	}
-	fmt.Printf("%sลบแล้ว %s%d %suser%s\n", cGrnBold, cWhtBold, len(removed), cGrnBold, cReset)
-	for _, name := range removed {
-		deleteV1Compat(name)
-		fmt.Printf("  %s- %s%s%s\n", cRedBold, cWhtBold, name, cReset)
+
+	// v1 compat: reset the expired-count file it checks on menu load.
+	_ = os.MkdirAll("/etc/SSHPlus", 0o755)
+	_ = os.WriteFile("/etc/SSHPlus/Exp", []byte("0\n"), 0o644)
+
+	fmt.Println()
+	if len(allRemoved) == 0 {
+		fmt.Println(cYelBold + "ไม่พบผู้ใช้ที่หมดอายุ" + cReset)
+	} else {
+		fmt.Printf("%sลบแล้ว %s%d %suser%s\n", cGrnBold, cWhtBold, len(allRemoved), cGrnBold, cReset)
 	}
 	waitEnter(r)
 	return nil
@@ -958,7 +989,12 @@ func runListUsers(r *bufio.Reader) error {
 		return nil
 	}
 
-	now := time.Now().UTC()
+	// Build online maps once, same as sshmonitor (function 04).
+	// ps -u user | grep sshd doesn't work on Ubuntu 22+ because all sshd
+	// processes run as root regardless of authenticated user.
+	sshOnline := readSSHLogins()
+	ovpnOnline := readOpenVPNUsers()
+
 	tUser, tOnline, tExpired := 0, 0, 0
 	for _, rec := range records {
 		tUser++
@@ -987,21 +1023,11 @@ func runListUsers(r *bufio.Reader) error {
 				tExpired++
 				expCol = cRedBold + "หมดอายุ" + cReset
 			} else {
-				_ = now
 				expCol = fmt.Sprintf("%s%d %sวัน%s", cYelBold, daysLeft, cWhtBold, cReset)
 			}
 		}
 
-		// count online SSH sessions
-		sshdCount := 0
-		if out, err := exec.Command("ps", "-u", rec.Name, "-o", "comm=").Output(); err == nil {
-			for _, l := range strings.Split(string(out), "\n") {
-				if strings.Contains(l, "sshd") {
-					sshdCount++
-				}
-			}
-		}
-		if sshdCount > 0 {
+		if sshOnline[rec.Name] > 0 || ovpnOnline[rec.Name] > 0 {
 			tOnline++
 		}
 
