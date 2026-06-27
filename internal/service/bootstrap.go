@@ -96,7 +96,7 @@ http_port 3128
 
 # Standard ACL set sourced from the upstream squid.conf example.
 acl localhost src 127.0.0.1/32
-acl to_localhost dst 127.0.0.0/8 0.0.0.0/32
+acl to_localhost dst 127.0.0.0/8
 acl localnet src 10.0.0.0/8
 acl localnet src 172.16.0.0/12
 acl localnet src 192.168.0.0/16
@@ -115,6 +115,7 @@ acl CONNECT method CONNECT
 
 http_access deny !Safe_ports
 http_access deny CONNECT !SSL_ports
+http_access allow CONNECT SSL_ports
 http_access allow localhost
 http_access allow localnet
 http_access deny all

@@ -1,21 +1,24 @@
-// proxies.go: the SOCKS-proxy management sub-menu (option 10.4).
+// proxies.go: SOCKS proxy sub-menu (conexao option 4).
 //
-// v1 ran three separate Python proxies (proxy.py, wsproxy.py, open.py)
-// under screen sessions and the conexao menu let the operator turn each
-// on/off and tweak the spoof status line. v2 collapses all three into
-// the Go-native internal/proxy package - one DB row per proxy, one
-// systemd unit each. This file is the Thai TUI on top of that backend.
+// UI mirrors v1 conexao fun_socks() exactly:
+//   [1] SOCKS SSH   ◉/○  (พอร์ต: XXXX)
+//   [2] WEBSOCKET   ◉/○  (พอร์ต: XXXX)
+//   [3] SOCKS OPENVPN ◉/○ (พอร์ต: XXXX)
+//   [4] เปิดพอร์ต
+//   [5] เปลี่ยนสถานะ SOCKS SSH
+//   [6] เปลี่ยนสถานะ WEBSOCKET
+//   [0] ย้อนกลับ
 //
-// We deliberately mirror the structure of serviceMenu(): a top-level
-// listing of what's configured plus a small numeric action grid. The
-// operator's muscle memory ("01 = add, 02 = remove, 00 = back") matches
-// the rest of the conexao flow.
+// Selecting 1/2/3 toggles the proxy on/off (install flow when off,
+// stop+remove when on). The backend is Go-native systemd units instead
+// of v1's python screen sessions, but the operator experience is identical.
 
 package menu
 
 import (
 	"bufio"
 	"fmt"
+	"os"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -25,54 +28,105 @@ import (
 	"github.com/lolyhexey/hexplus/internal/service"
 )
 
-// proxyPresets mirrors the cmd/hexplus presets so the menu offers the
-// same WebSocket/CONNECT response shapes v1 customers expect. Kept in
-// this file rather than reaching into cmd/hexplus so the menu package
-// has no upward dependency.
-var proxyPresets = []struct {
+// proxySlot describes one of the three fixed SOCKS proxy slots.
+type proxySlot struct {
+	key         string // DB key: "ssh", "ws", "openvpn"
+	label       string // display label: "SOCKS SSH", "WEBSOCKET", "SOCKS OPENVPN"
+	defPort     int
+	defHost     string
+	defCode     string
+	defMsg      string
+}
+
+var proxySlots = []proxySlot{
+	{
+		key:     "ssh",
+		label:   "SOCKS SSH",
+		defPort: 8880,
+		defHost: "127.0.0.1:22",
+		defCode: "200",
+		defMsg:  `Connection established\r\nContent-length: 0`,
+	},
+	{
+		key:     "ws",
+		label:   "WEBSOCKET",
+		defPort: 8080,
+		defHost: "127.0.0.1:22",
+		defCode: "101",
+		defMsg:  `<font color="null">HEXPLUS</font>`,
+	},
+	{
+		key:     "openvpn",
+		label:   "SOCKS OPENVPN",
+		defPort: 1194,
+		defHost: "",  // filled at runtime from OpenVPN config
+		defCode: "101",
+		defMsg:  `<font color="null">HEXPLUS</font>`,
+	},
+}
+
+// colorPicker maps v1's 10-option color menu to HTML color names.
+var colorPicker = []struct {
+	label string
+	value string
+}{
+	{"สีน้ำเงิน", "blue"},
+	{"สีเขียว", "green"},
+	{"สีแดง", "red"},
+	{"สีเหลือง", "yellow"},
+	{"สีชมพู", "#F535AA"},
+	{"สีฟ้า", "cyan"},
+	{"สีส้ม", "#FF7F00"},
+	{"สีม่วง", "#9932CD"},
+	{"สีดำ", "black"},
+	{"ไม่มีสี", "null"},
+}
+
+// proxyPresets for install flow (1-5).
+var proxyCodePresets = []struct {
 	idx  string
 	code string
 	msg  string
 	desc string
 }{
-	{"1", "101", `<font color="null">HEXPLUS</font>`, "101 Switching Protocols (WebSocket spoof)"},
-	{"2", "200", `Connection established\r\nContent-length: 0`, "200 Connection established (CONNECT spoof)"},
-	{"3", "400", `<font color="null">HEXPLUS</font>\r\nContent-length: 0`, "400 Bad Request (HEXPLUS marker)"},
-	{"4", "520", `<font color="null">HEXPLUS</font>\r\nContent-length: 0`, "520 Unknown Error (HEXPLUS marker)"},
+	{"1", "200", `Connection established\r\nContent-length: 0`, "200 HTTP CONNECT proxy + Content-length (แนะนำ — สำหรับ SOCKS SSH)"},
+	{"2", "101", `<font color="null">HEXPLUS</font>`, "101 WebSocket spoof handshake"},
+	{"3", "400", `<font color="null">HEXPLUS</font>\r\nContent-length: 0`, "400 Bad Request spoof + Content-length"},
+	{"4", "520", `<font color="null">HEXPLUS</font>\r\nContent-length: 0`, "520 Cloudflare error spoof + Content-length"},
+	{"5", "", "", "กำหนดเอง"},
 }
 
-// runProxies is the entry point conexao.go wires option 4 to. Loops
-// until the user picks 0 (back).
+// runProxies is the entry point wired in conexao.go option 4.
 func runProxies(r *bufio.Reader) error {
 	for {
+		db, _ := proxy.Load()
 		clearScreen()
-		paintProxiesHeader()
-		if err := paintProxiesList(); err != nil {
-			fmt.Println(cRedBold + "[ผิดพลาด] " + cYelBold + err.Error() + cReset)
-		}
-		paintProxiesMenu()
+		printSep()
+		fmt.Println("\033[44;1;37m            จัดการ PROXY SOCKS             \033[0m")
+		printSep()
+		fmt.Println()
+		paintSocksList(db)
+		fmt.Println()
+		paintSocksMenu()
 		choice, err := readChoice(r)
 		if err != nil {
 			return err
 		}
 		switch choice {
-		case "0", "00":
+		case "0":
 			return nil
-		case "1", "01":
-			if err := proxyAdd(r); err != nil {
-				fmt.Println("\n" + cRedBold + "[ผิดพลาด] " + cYelBold + err.Error() + cReset)
-			}
-			waitEnter(r)
-		case "2", "02":
-			if err := proxyRemove(r); err != nil {
-				fmt.Println("\n" + cRedBold + "[ผิดพลาด] " + cYelBold + err.Error() + cReset)
-			}
-			waitEnter(r)
-		case "3", "03":
-			if err := proxyDetail(r); err != nil {
-				fmt.Println("\n" + cRedBold + "[ผิดพลาด] " + cYelBold + err.Error() + cReset)
-			}
-			waitEnter(r)
+		case "1":
+			proxyToggle(r, db, &proxySlots[0])
+		case "2":
+			proxyToggle(r, db, &proxySlots[1])
+		case "3":
+			proxyToggle(r, db, &proxySlots[2])
+		case "4":
+			proxyOpenPort(r, db)
+		case "5":
+			proxyChangeStatus(r, db, &proxySlots[0])
+		case "6":
+			proxyChangeStatus(r, db, &proxySlots[1])
 		default:
 			fmt.Println("\n" + cRedBold + "[ผิดพลาด]" + cYelBold + " ตัวเลือกไม่ถูกต้อง" + cReset)
 			waitEnter(r)
@@ -80,127 +134,120 @@ func runProxies(r *bufio.Reader) error {
 	}
 }
 
-func paintProxiesHeader() {
-	printSep()
-	fmt.Println("\033[44;1;37m            จัดการ SOCKS Proxy            \033[0m")
-	printSep()
-	fmt.Println()
-}
-
-// paintProxiesList prints the configured proxies with a ●/○ listen
-// marker so the operator can see at a glance which are up.
-func paintProxiesList() error {
-	db, err := proxy.Load()
-	if err != nil {
-		return err
-	}
-	all := db.All()
-	if len(all) == 0 {
-		fmt.Println(cYelBold + "(ยังไม่มี Proxy ที่กำหนด)" + cReset)
-		fmt.Println()
-		return nil
-	}
-	for _, c := range all {
-		marker := markerOff()
-		if up, _ := service.ListenStatus(c.Port, "tcp"); up {
-			marker = markerOn()
+// paintSocksList prints the 3 slots with ◉/○ and port label — v1 style.
+func paintSocksList(db *proxy.DB) {
+	for _, s := range proxySlots {
+		cfg, exists := db.Proxies[s.key]
+		up := false
+		if exists {
+			up, _ = service.ListenStatus(cfg.Port, "tcp")
 		}
-		fmt.Printf("%s%s%-12s%s  %sพอร์ต %s%-5d%s  %sdefault→%s%-20s%s  %sCODE %s%s%s\n",
-			marker, cWhtBold, c.Name, cReset,
-			cGrnBold, cWhtBold, c.Port, cReset,
-			cGrnBold, cWhtBold, c.DefaultHost, cReset,
-			cGrnBold, cWhtBold, c.StatusCode, cReset)
+		var marker, portLabel string
+		if up {
+			marker = "\033[1;32m◉\033[0m"
+			portLabel = " \033[1;36m(พอร์ต: " + strconv.Itoa(cfg.Port) + ")\033[0m"
+		} else {
+			marker = "\033[1;31m○\033[0m"
+			portLabel = ""
+		}
+		fmt.Printf("  %s \033[1;33m%s%s\033[0m\n", marker, s.label, portLabel)
 	}
-	fmt.Println()
-	return nil
 }
 
-func paintProxiesMenu() {
-	items := []struct {
-		idx, label string
-	}{
-		{"01", "เพิ่ม Proxy ใหม่"},
-		{"02", "ลบ Proxy"},
-		{"03", "รายละเอียด Proxy"},
+func paintSocksMenu() {
+	items := []struct{ idx, label string }{
+		{"1", "SOCKS SSH"},
+		{"2", "WEBSOCKET"},
+		{"3", "SOCKS OPENVPN"},
+		{"4", "เปิดพอร์ต"},
+		{"5", "เปลี่ยนสถานะ SOCKS SSH"},
+		{"6", "เปลี่ยนสถานะ WEBSOCKET"},
 	}
 	for _, it := range items {
-		fmt.Printf("%s[%s%s%s] %s• %s%s%s\n",
-			cRedBold, cCyanBold, it.idx, cRedBold,
-			cWhtBold, cYelBold, it.label, cReset)
+		fmt.Printf("\033[1;31m[\033[1;36m%s\033[1;31m] \033[1;37m• \033[1;33m%s\033[0m\n", it.idx, it.label)
 	}
-	fmt.Printf("%s[%s00%s] %s• %sย้อนกลับ%s\n",
-		cRedBold, cCyanBold, cRedBold, cWhtBold, cYelBold, cReset)
+	fmt.Printf("\033[1;31m[\033[1;36m0\033[1;31m] \033[1;37m• \033[1;33mย้อนกลับ\033[0m\n")
 	fmt.Println()
 	printSep()
-	fmt.Println()
+	fmt.Print("\033[1;32mเลือกตัวเลือก \033[1;33m?\033[1;37m ")
 }
 
-// proxyAdd prompts for the fields hexplus proxy add accepts on the
-// CLI, validates by spinning up a Handler, then persists + writes the
-// systemd unit.
-func proxyAdd(r *bufio.Reader) error {
+// proxyToggle turns a slot ON (install) or OFF (remove) based on current state.
+func proxyToggle(r *bufio.Reader, db *proxy.DB, s *proxySlot) {
+	cfg, exists := db.Proxies[s.key]
+	running := false
+	if exists {
+		running, _ = service.ListenStatus(cfg.Port, "tcp")
+	}
+
 	clearScreen()
-	printSep()
-	fmt.Println(cWhtBold + "เพิ่ม Proxy ใหม่" + cReset)
-	printSep()
+	if running {
+		// --- TURN OFF ---
+		fmt.Println("\033[41;1;37m             " + s.label + "              \033[0m")
+		fmt.Println()
+		fmt.Println(cGrnBold + "กำลังปิด " + s.label + cYelBold)
+		_ = systemctlRun("disable", "--now", cfg.UnitName())
+		time.Sleep(500 * time.Millisecond)
+		_, _, _, _ = proxy.RemoveUnit(cfg)
+		delete(db.Proxies, s.key)
+		_ = db.Save()
+		fmt.Println(cGrnBold + "ปิด " + s.label + " สำเร็จแล้ว!" + cReset)
+		time.Sleep(2 * time.Second)
+	} else {
+		// --- TURN ON ---
+		fmt.Println("\033[44;1;37m             " + s.label + "              \033[0m")
+		fmt.Println()
+		if err := proxyInstall(r, db, s); err != nil {
+			fmt.Println("\n" + cRedBold + "[ผิดพลาด] " + cYelBold + err.Error() + cReset)
+			waitEnter(r)
+		}
+	}
+}
+
+// proxyInstall runs the full install flow: port → host → code → msg → start.
+func proxyInstall(r *bufio.Reader, db *proxy.DB, s *proxySlot) error {
+	portStr, err := promptLine(r, "ต้องการใช้พอร์ตใด ? : ")
+	if err != nil {
+		return err
+	}
+	port, err := strconv.Atoi(strings.TrimSpace(portStr))
+	if err != nil || port < 1 || port > 65535 {
+		return fmt.Errorf("พอร์ตไม่ถูกต้อง: %q — พอร์ตต้องเป็นตัวเลข 1-65535", portStr)
+	}
+
+	defHost := s.defHost
+	if s.key == "openvpn" {
+		defHost = detectOpenVPNHost()
+	}
+	hostPrompt := fmt.Sprintf("DEFAULT HOST (host:port ที่จะ tunnel เมื่อ client ไม่ส่ง X-Real-Host) [%s]: ", defHost)
+	host, err := promptLine(r, hostPrompt)
+	if err != nil {
+		return err
+	}
+	if host == "" {
+		host = defHost
+	}
+
 	fmt.Println()
-
-	name, err := promptLine(r, "ชื่อ Proxy (a-z, 2-32): ")
+	fmt.Println(cGrnBold + "เลือก RESPONSE STATUS CODE:" + cReset)
+	for _, p := range proxyCodePresets {
+		fmt.Printf("  \033[1;31m[\033[1;36m%s\033[1;31m] \033[1;33m%s\033[0m\n", p.idx, p.desc)
+	}
+	codeChoice, err := promptLine(r, "เลือก [1-5] (default: 1): ")
 	if err != nil {
 		return err
 	}
-	if err := proxy.ValidateName(name); err != nil {
-		return err
+	if codeChoice == "" {
+		codeChoice = "1"
 	}
 
-	db, err := proxy.Load()
-	if err != nil {
-		return err
-	}
-	if _, exists := db.Proxies[name]; exists {
-		return fmt.Errorf("proxy %q มีอยู่แล้ว", name)
-	}
-
-	portStr, err := promptLine(r, "พอร์ต (1-65535): ")
-	if err != nil {
-		return err
-	}
-	port, err := strconv.Atoi(portStr)
-	if err != nil || port <= 0 || port > 65535 {
-		return fmt.Errorf("พอร์ตไม่ถูกต้อง: %q", portStr)
-	}
-
-	target, err := promptLine(r, "Target host:port [127.0.0.1:22]: ")
-	if err != nil {
-		return err
-	}
-	if target == "" {
-		target = "127.0.0.1:22"
-	}
-
-	fmt.Println()
-	fmt.Println(cWhtBold + "เลือก Preset ตอบกลับ:" + cReset)
-	for _, p := range proxyPresets {
-		fmt.Printf("  %s[%s%s%s] %s%s%s\n",
-			cRedBold, cCyanBold, p.idx, cRedBold,
-			cYelBold, p.desc, cReset)
-	}
-	fmt.Printf("  %s[%s5%s] %sกำหนดเอง%s\n",
-		cRedBold, cCyanBold, cRedBold, cYelBold, cReset)
-	choice, err := promptLine(r, "เลือก [1]: ")
-	if err != nil {
-		return err
-	}
-	if choice == "" {
-		choice = "1"
-	}
-	var statusCode, statusMsg string
-	switch choice {
+	var statusCode, defaultMsg string
+	switch codeChoice {
 	case "1", "2", "3", "4":
-		for _, p := range proxyPresets {
-			if p.idx == choice {
+		for _, p := range proxyCodePresets {
+			if p.idx == codeChoice {
 				statusCode = p.code
-				statusMsg = p.msg
+				defaultMsg = p.msg
 			}
 		}
 	case "5":
@@ -211,75 +258,198 @@ func proxyAdd(r *bufio.Reader) error {
 		if statusCode == "" {
 			return fmt.Errorf("status code ห้ามว่าง")
 		}
-		statusMsg, err = promptLine(r, `Status message (ใช้ \r\n สำหรับขึ้นบรรทัดใหม่): `)
-		if err != nil {
-			return err
-		}
+		defaultMsg = ""
 	default:
-		return fmt.Errorf("ตัวเลือก preset ไม่ถูกต้อง: %q", choice)
+		return fmt.Errorf("ตัวเลือกไม่ถูกต้อง: %q", codeChoice)
+	}
+
+	msgPrompt := fmt.Sprintf(`RESPONSE MSG [%s]: `, defaultMsg)
+	msg, err := promptLine(r, msgPrompt)
+	if err != nil {
+		return err
+	}
+	if msg == "" {
+		msg = defaultMsg
 	}
 
 	cfg := proxy.Config{
-		Name:        name,
+		Name:        s.key,
 		Port:        port,
-		DefaultHost: target,
+		DefaultHost: host,
 		StatusCode:  statusCode,
-		StatusMsg:   statusMsg,
+		StatusMsg:   msg,
 	}
-	// Validate the full config the same way the CLI does so a bad
-	// status code is caught before any file is written.
 	if _, err := proxy.NewHandler(cfg); err != nil {
 		return err
 	}
 
-	db.Proxies[name] = cfg
+	db.Proxies[s.key] = cfg
 	if err := db.Save(); err != nil {
 		return err
 	}
-	unitPath, written, reloadErr, err := proxy.WriteUnit(cfg)
+	_, _, reloadErr, err := proxy.WriteUnit(cfg)
 	if err != nil {
 		return err
 	}
 	if reloadErr != nil {
-		fmt.Println(cYelBold + "  คำเตือน: systemctl daemon-reload: " + reloadErr.Error() + cReset)
+		fmt.Println(cYelBold + "  คำเตือน: daemon-reload: " + reloadErr.Error() + cReset)
 	}
-
-	// v1 conexao (lines 1564-1579) starts the SOCKS proxy immediately and
-	// verifies via netstat. Replicate that with systemctl enable --now +
-	// /proc/net/tcp poll so the operator sees the same "เปิดใช้งาน SOCKS
-	// สำเร็จแล้ว" success / red-error wording as in v1.
 	unitName := cfg.UnitName()
-	if enableErr := systemctlRun("enable", "--now", unitName); enableErr != nil {
-		fmt.Println()
+	fmt.Println()
+	fmt.Println(cGrnBold + "กำลังเริ่ม " + s.label + cYelBold)
+	if err := systemctlRun("enable", "--now", unitName); err != nil {
 		fmt.Println(cRedBold + "[ผิดพลาด]" + cYelBold +
-			" PROXY SOCKS เริ่มทำงานไม่สำเร็จ: systemctl enable --now " +
-			unitName + ": " + enableErr.Error() + cReset)
-		_ = written // keep ref so go vet doesn't complain
-		_ = unitPath
+			" " + s.label + " เริ่มทำงานไม่สำเร็จ: " + err.Error() + cReset)
 		return nil
 	}
-	// systemd 'started' the service but the listener doesn't bind
-	// instantly on slower boxes; sleep briefly then check.
 	time.Sleep(700 * time.Millisecond)
-	listening, _ := service.ListenStatus(cfg.Port, "tcp")
-	fmt.Println()
-	if listening {
+	if up, _ := service.ListenStatus(port, "tcp"); up {
 		fmt.Println(cGrnBold + "เปิดใช้งาน SOCKS สำเร็จแล้ว" + cReset)
-		fmt.Printf("%sพอร์ต %s%d%s กำลังฟัง%s\n", cGrnBold, cCyanBold, cfg.Port, cGrnBold, cReset)
 	} else {
 		fmt.Println(cRedBold + "[ผิดพลาด]" + cYelBold +
-			" PROXY SOCKS เริ่มทำงานไม่สำเร็จบนพอร์ต " +
-			strconv.Itoa(cfg.Port) +
+			" PROXY SOCKS เริ่มทำงานไม่สำเร็จบนพอร์ต " + strconv.Itoa(port) +
 			": ไม่พบ socket ใน LISTEN — ตรวจสอบ journalctl -u " + unitName + cReset)
 	}
+	time.Sleep(2 * time.Second)
 	return nil
 }
 
-// systemctlRun is a thin shell-out for systemctl <verb> <args...>. Lives
-// here rather than in service/ because we want to avoid an import cycle
-// (service already imports menu? no — it does not — but we keep this
-// local to keep the proxies code self-contained). Errors include the
-// combined stderr so the menu surfaces useful diagnostics.
+// proxyOpenPort (option 4): opens an additional port via the OS firewall.
+// Mirrors v1 behaviour: only works when SOCKS SSH is already running.
+func proxyOpenPort(r *bufio.Reader, db *proxy.DB) {
+	clearScreen()
+	printSep()
+	fmt.Println(cWhtBold + "เปิดพอร์ต" + cReset)
+	printSep()
+	fmt.Println()
+
+	cfg, exists := db.Proxies["ssh"]
+	if !exists {
+		fmt.Println(cRedBold + "ฟังก์ชันไม่พร้อมใช้งาน" + cReset)
+		fmt.Println()
+		fmt.Println(cYelBold + "กรุณาเปิดใช้งาน SOCKS ก่อน !" + cReset)
+		waitEnter(r)
+		return
+	}
+	fmt.Printf(cYelBold+"พอร์ตที่ใช้งานอยู่: "+cGrnBold+"%d\n"+cReset, cfg.Port)
+	fmt.Println()
+
+	portStr, err := promptLine(r, "ต้องการเปิดพอร์ตใด ? : ")
+	if err != nil {
+		return
+	}
+	port, err := strconv.Atoi(strings.TrimSpace(portStr))
+	if err != nil || port < 1 || port > 65535 {
+		fmt.Println(cRedBold + "[ผิดพลาด] พอร์ตไม่ถูกต้อง" + cReset)
+		waitEnter(r)
+		return
+	}
+
+	// Try ufw first, fall back to iptables.
+	opened := false
+	if path, err := exec.LookPath("ufw"); err == nil {
+		cmd := exec.Command(path, "allow", strconv.Itoa(port)+"/tcp")
+		if out, err := cmd.CombinedOutput(); err == nil {
+			_ = out
+			opened = true
+		}
+	}
+	if !opened {
+		cmd := exec.Command("iptables", "-I", "INPUT", "-p", "tcp",
+			"--dport", strconv.Itoa(port), "-j", "ACCEPT")
+		if err := cmd.Run(); err == nil {
+			opened = true
+		}
+	}
+	fmt.Println()
+	if opened {
+		fmt.Println(cGrnBold + "เปิดใช้งาน PROXY SOCKS สำเร็จแล้ว" + cReset)
+	} else {
+		fmt.Println(cRedBold + "[ผิดพลาด] เปิดพอร์ตไม่สำเร็จ — ตรวจสอบ ufw/iptables" + cReset)
+	}
+	waitEnter(r)
+}
+
+// proxyChangeStatus (options 5/6): lets the operator set a custom status
+// message + font color — mirrors v1's fun_msgsocks / fun_msgwssocks.
+func proxyChangeStatus(r *bufio.Reader, db *proxy.DB, s *proxySlot) {
+	clearScreen()
+	printSep()
+	fmt.Println(cWhtBold + "เปลี่ยนสถานะ " + s.label + cReset)
+	printSep()
+	fmt.Println()
+
+	cfg, exists := db.Proxies[s.key]
+	if !exists {
+		fmt.Println(cRedBold + "ฟังก์ชันไม่พร้อมใช้งาน" + cReset)
+		fmt.Println()
+		fmt.Println(cYelBold + "กรุณาเปิดใช้งาน " + s.label + " ก่อน !" + cReset)
+		waitEnter(r)
+		return
+	}
+
+	fmt.Printf(cYelBold+"สถานะปัจจุบัน: "+cGrnBold+"%s\n\n"+cReset, cfg.StatusMsg)
+
+	text, err := promptLine(r, "ใส่ข้อความสถานะของคุณ : ")
+	if err != nil {
+		return
+	}
+
+	fmt.Println()
+	for i, c := range colorPicker {
+		fmt.Printf("\033[1;31m[\033[1;36m%02d\033[1;31m]\033[1;33m %s\033[0m\n", i+1, c.label)
+	}
+	fmt.Println()
+	colorChoice, err := promptLine(r, "เลือกสีใด ? : ")
+	if err != nil {
+		return
+	}
+	n, _ := strconv.Atoi(strings.TrimSpace(colorChoice))
+	color := "null"
+	if n >= 1 && n <= len(colorPicker) {
+		color = colorPicker[n-1].value
+	}
+
+	cfg.StatusMsg = fmt.Sprintf(`<font color="%s">%s</font>`, color, text)
+	db.Proxies[s.key] = cfg
+	fmt.Println()
+	fmt.Println(cGrnBold + "กำลังเปลี่ยนสถานะ!" + cReset)
+
+	if err := db.Save(); err != nil {
+		fmt.Println(cRedBold + "[ผิดพลาด] " + err.Error() + cReset)
+		waitEnter(r)
+		return
+	}
+	_, _, _, _ = proxy.WriteUnit(cfg)
+	_ = systemctlRun("restart", cfg.UnitName())
+	time.Sleep(500 * time.Millisecond)
+	fmt.Println(cGrnBold + "เปลี่ยนสถานะสำเร็จแล้ว!" + cReset)
+	time.Sleep(2 * time.Second)
+}
+
+// detectOpenVPNHost returns the OpenVPN server's listen address for use as
+// the SOCKS OPENVPN default host. Falls back to 127.0.0.1:1194.
+func detectOpenVPNHost() string {
+	for _, path := range []string{"/etc/openvpn/server.conf", "/etc/openvpn/server/server.conf"} {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		for _, line := range strings.Split(string(data), "\n") {
+			line = strings.TrimSpace(line)
+			if strings.HasPrefix(line, "port ") {
+				p := strings.TrimSpace(strings.TrimPrefix(line, "port "))
+				if _, err := strconv.Atoi(p); err == nil {
+					return "127.0.0.1:" + p
+				}
+			}
+		}
+	}
+	return "127.0.0.1:1194"
+}
+
+// systemctlRun shells out to systemctl. Kept here (not in service/) to
+// avoid an import cycle.
 func systemctlRun(args ...string) error {
 	cmd := exec.Command("systemctl", args...)
 	out, err := cmd.CombinedOutput()
@@ -293,124 +463,7 @@ func systemctlRun(args ...string) error {
 	return nil
 }
 
-// proxyRemove lists the configured proxies, lets the operator pick one
-// by index, deletes the DB row and removes the systemd unit.
-func proxyRemove(r *bufio.Reader) error {
-	db, err := proxy.Load()
-	if err != nil {
-		return err
-	}
-	all := db.All()
-	if len(all) == 0 {
-		return fmt.Errorf("ยังไม่มี Proxy ให้ลบ")
-	}
-
-	clearScreen()
-	printSep()
-	fmt.Println(cWhtBold + "ลบ Proxy" + cReset)
-	printSep()
-	fmt.Println()
-	for i, c := range all {
-		fmt.Printf("  %s[%s%2d%s] %s%-12s%s  พอร์ต %d\n",
-			cRedBold, cCyanBold, i+1, cRedBold,
-			cYelBold, c.Name, cReset, c.Port)
-	}
-	fmt.Println()
-
-	pick, err := promptLine(r, "เลือกหมายเลข Proxy (0 = ยกเลิก): ")
-	if err != nil {
-		return err
-	}
-	if pick == "0" || pick == "" {
-		return nil
-	}
-	n, err := strconv.Atoi(pick)
-	if err != nil || n < 1 || n > len(all) {
-		return fmt.Errorf("หมายเลขไม่ถูกต้อง: %q", pick)
-	}
-	cfg := all[n-1]
-
-	delete(db.Proxies, cfg.Name)
-	if err := db.Save(); err != nil {
-		return err
-	}
-	unitPath, removed, reloadErr, err := proxy.RemoveUnit(cfg)
-	if err != nil {
-		return err
-	}
-	fmt.Println()
-	fmt.Println(cGrnBold + "ลบ Proxy " + cWhtBold + cfg.Name + cGrnBold + " เรียบร้อย" + cReset)
-	if removed {
-		fmt.Println(cGrnBold + "  - " + cWhtBold + unitPath + cReset)
-	} else {
-		fmt.Println(cYelBold + "  (ไม่พบ unit file: " + unitPath + ")" + cReset)
-	}
-	if reloadErr != nil {
-		fmt.Println(cYelBold + "  คำเตือน: systemctl daemon-reload: " + reloadErr.Error() + cReset)
-	}
-	return nil
-}
-
-// proxyDetail dumps the full Config of one selected proxy plus a live
-// "is it listening?" probe of /proc/net.
-func proxyDetail(r *bufio.Reader) error {
-	db, err := proxy.Load()
-	if err != nil {
-		return err
-	}
-	all := db.All()
-	if len(all) == 0 {
-		return fmt.Errorf("ยังไม่มี Proxy ที่กำหนด")
-	}
-
-	clearScreen()
-	printSep()
-	fmt.Println(cWhtBold + "รายละเอียด Proxy" + cReset)
-	printSep()
-	fmt.Println()
-	for i, c := range all {
-		fmt.Printf("  %s[%s%2d%s] %s%-12s%s  พอร์ต %d\n",
-			cRedBold, cCyanBold, i+1, cRedBold,
-			cYelBold, c.Name, cReset, c.Port)
-	}
-	fmt.Println()
-
-	pick, err := promptLine(r, "เลือกหมายเลข Proxy (0 = ยกเลิก): ")
-	if err != nil {
-		return err
-	}
-	if pick == "0" || pick == "" {
-		return nil
-	}
-	n, err := strconv.Atoi(pick)
-	if err != nil || n < 1 || n > len(all) {
-		return fmt.Errorf("หมายเลขไม่ถูกต้อง: %q", pick)
-	}
-	c := all[n-1]
-
-	fmt.Println()
-	fmt.Println(cWhtBold + "ชื่อ:         " + cYelBold + c.Name + cReset)
-	fmt.Println(cWhtBold + "พอร์ต:        " + cYelBold + strconv.Itoa(c.Port) + cReset)
-	fmt.Println(cWhtBold + "Default host: " + cYelBold + c.DefaultHost + cReset)
-	fmt.Println(cWhtBold + "Status code:  " + cYelBold + c.StatusCode + cReset)
-	fmt.Println(cWhtBold + "Status msg:   " + cYelBold + c.StatusMsg + cReset)
-	if len(c.AllowedHosts) > 0 {
-		fmt.Println(cWhtBold + "Allowed:      " + cYelBold + strings.Join(c.AllowedHosts, ", ") + cReset)
-	}
-	fmt.Println(cWhtBold + "Unit:         " + cYelBold + c.UnitName() + cReset)
-
-	if up, err := service.ListenStatus(c.Port, "tcp"); err == nil {
-		if up {
-			fmt.Println(cWhtBold + "สถานะพอร์ต:   " + cGrnBold + "ทำงาน (LISTEN)" + cReset)
-		} else {
-			fmt.Println(cWhtBold + "สถานะพอร์ต:   " + cRedBold + "ไม่ได้ฟัง" + cReset)
-		}
-	}
-	return nil
-}
-
-// promptLine prints prompt, reads one line, returns trimmed text. Small
-// helper around bufio.Reader so each prompt site stays one line.
+// promptLine prints a prompt and returns the trimmed input line.
 func promptLine(r *bufio.Reader, prompt string) (string, error) {
 	fmt.Print(cGrnBold + prompt + cReset)
 	line, err := r.ReadString('\n')
