@@ -62,8 +62,8 @@ persist-key
 persist-tun
 remote-cert-tls server
 tls-version-min 1.2
-data-ciphers AES-256-GCM:AES-128-GCM:AES-256-CBC
-data-ciphers-fallback AES-256-CBC
+setenv opt data-ciphers AES-256-GCM:AES-128-GCM:AES-256-CBC
+setenv opt data-ciphers-fallback AES-256-CBC
 cipher AES-256-CBC
 auth SHA256
 setenv opt block-outside-dns

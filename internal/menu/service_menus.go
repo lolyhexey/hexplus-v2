@@ -1021,6 +1021,9 @@ func setupNetworking(port int, proto, serverIP string) {
 	}
 }
 
+// ovpnPort reads the port from /etc/openvpn/server.conf, fallback 1194.
+func ovpnPort() int { return readOpenVPNPort(service.Service{Port: 1194}) }
+
 func readOpenVPNPort(svc service.Service) int {
 	if data, err := os.ReadFile("/etc/openvpn/server.conf"); err == nil {
 		for _, line := range strings.Split(string(data), "\n") {
