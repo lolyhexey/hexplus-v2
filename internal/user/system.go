@@ -76,7 +76,11 @@ func SystemUserExists(name string) (bool, error) {
 // so the CLI surfaces the underlying reason (e.g. "user already exists",
 // "invalid date format").
 func CreateSystemUser(name string, expires time.Time) error {
-	args := []string{"-M", "-s", "/bin/false"}
+	// Shell must be /bin/sh so sshd can run ForceCommand via "shell -c cmd".
+	// /bin/false ignores -c, causing ForceCommand /bin/sleep infinity to exit
+	// immediately and collapsing the SOCKS5 channel. ForceCommand in sshd_config
+	// (set by ensureSSHConfig) prevents any real shell access regardless of shell.
+	args := []string{"-M", "-s", "/bin/sh"}
 	if !expires.IsZero() {
 		args = append(args, "-e", expires.UTC().Format("2006-01-02"))
 	}

@@ -416,6 +416,13 @@ func ensureSSHConfig() {
 	// that shell log in via SSH. v1 conexao:481 does the same on dropbear install.
 	ensureFalseShell()
 
+	// Migrate existing hexplus users from /bin/false to /bin/sh so ForceCommand
+	// works (sshd runs ForceCommand via "shell -c cmd"; /bin/false ignores -c).
+	ensureUserShells()
+
+	// Match block must live at the end of sshd_config.
+	conf, changed = ensureSSHMatchBlock(conf, changed)
+
 	if !changed {
 		return
 	}
@@ -423,6 +430,79 @@ func ensureSSHConfig() {
 		return
 	}
 	restartSSH()
+}
+
+// ensureSSHMatchBlock appends (or re-writes) a Match User *,!root block at the
+// end of sshd_config that forces /bin/sleep infinity as the command.
+// Without this, SSH tunnelling apps (HTTP Injector, etc.) that open a session
+// channel alongside the SOCKS5 channel see the /bin/false exit and immediately
+// tear down the SOCKS5 channel, making traffic stop flowing.
+// /bin/sleep infinity doesn't read stdin (avoiding the EOF-exit problem of
+// /bin/cat in non-interactive sessions) and runs until sshd terminates it on
+// disconnect, keeping the session channel alive for the duration of the tunnel.
+func ensureSSHMatchBlock(conf string, alreadyChanged bool) (string, bool) {
+	const (
+		matchLine = "Match User *,!root"
+		forceLine = "    ForceCommand /bin/sleep infinity"
+	)
+	// Strip any existing Match User *,!root block we previously wrote so we
+	// can re-append a canonical version without duplicates.
+	lines := strings.Split(conf, "\n")
+	var kept []string
+	skipUntilNextMatch := false
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == matchLine {
+			skipUntilNextMatch = true
+			continue
+		}
+		if skipUntilNextMatch {
+			// A new "Match" keyword ends the block we're skipping.
+			if strings.HasPrefix(trimmed, "Match ") {
+				skipUntilNextMatch = false
+			} else {
+				continue
+			}
+		}
+		kept = append(kept, line)
+	}
+	rebuilt := strings.TrimRight(strings.Join(kept, "\n"), "\n")
+
+	// Check whether the block was already correct in the original conf.
+	alreadyHad := strings.Contains(conf, matchLine) &&
+		strings.Contains(conf, forceLine)
+
+	rebuilt += "\n" + matchLine + "\n" + forceLine + "\n"
+	if alreadyHad {
+		// Block was correct already; just return the rebuilt text unchanged.
+		return rebuilt, alreadyChanged
+	}
+	return rebuilt, true
+}
+
+// ensureUserShells migrates hexplus users whose shell is /bin/false to /bin/sh.
+// ForceCommand in sshd_config (Match User *,!root) prevents real shell access.
+func ensureUserShells() {
+	data, err := os.ReadFile("/etc/passwd")
+	if err != nil {
+		return
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		parts := strings.Split(line, ":")
+		if len(parts) < 7 {
+			continue
+		}
+		name, shell := parts[0], parts[6]
+		if name == "root" || strings.TrimSpace(shell) != "/bin/false" {
+			continue
+		}
+		// Only migrate users created by hexplus (uid >= 1000, non-system).
+		uid, _ := strconv.Atoi(parts[2])
+		if uid < 1000 {
+			continue
+		}
+		_ = exec.Command("usermod", "-s", "/bin/sh", name).Run()
+	}
 }
 
 // ensureFalseShell adds /bin/false to /etc/shells when absent.
