@@ -505,17 +505,28 @@ func openvpnMenu(r *bufio.Reader, svc service.Service) error {
 		}
 
 		port := readOpenVPNPort(svc)
+		webMark := markerOff()
+		if _, err := os.Stat("/var/www/html"); err == nil {
+			webMark = markerOn()
+		}
+		multiMark := markerOff()
+		if ovpnConfContains("duplicate-cn") {
+			multiMark = markerOn()
+		}
+
 		paintTitleBar("          จัดการ OPENVPN           ")
 		fmt.Printf("\n%sพอร์ต%s: %s%d%s\n\n",
 			cYelBold, cWhtBold, cGrnBold, port, cReset)
 
-		paintOptions([][2]string{
-			{"1", "เปลี่ยนพอร์ต"},
-			{"2", "ลบ OPENVPN"},
-			{"3", "ปรับแต่ง Payload (.ovpn)"},
-			{"0", "ย้อนกลับ"},
-		})
+		// [3] and [4] use inline label+marker, not paintOptions, to match v1 format.
+		fmt.Printf("%s[%s1%s] %s• %sเปลี่ยนพอร์ต%s\n", cRedBold, cCyanBold, cRedBold, cWhtBold, cYelBold, cReset)
+		fmt.Printf("%s[%s2%s] %s• %sลบ OPENVPN%s\n", cRedBold, cCyanBold, cRedBold, cWhtBold, cYelBold, cReset)
+		fmt.Printf("%s[%s3%s] %s• %sOVPN ผ่านลิงก์ %s%s\n", cRedBold, cCyanBold, cRedBold, cWhtBold, cYelBold, webMark, cReset)
+		fmt.Printf("%s[%s4%s] %s• %sMULTILOGIN OVPN %s%s\n", cRedBold, cCyanBold, cRedBold, cWhtBold, cYelBold, multiMark, cReset)
+		fmt.Printf("%s[%s5%s] %s• %sเปลี่ยน HOST DNS%s\n", cRedBold, cCyanBold, cRedBold, cWhtBold, cYelBold, cReset)
+		fmt.Printf("%s[%s0%s] %s• %sย้อนกลับ%s\n", cRedBold, cCyanBold, cRedBold, cWhtBold, cYelBold, cReset)
 		fmt.Println()
+
 		choice, err := menuPrompt(r)
 		if err != nil {
 			return err
@@ -542,7 +553,11 @@ func openvpnMenu(r *bufio.Reader, svc service.Service) error {
 			waitEnter(r)
 			return nil
 		case "3", "03":
-			if err := runPayload(r); err != nil {
+			toggleOVPNWeb(r)
+		case "4", "04":
+			toggleMultilogin(r, svc)
+		case "5", "05":
+			if err := dnsHostMenu(r); err != nil {
 				fmt.Println("\n" + cRedBold + "[ผิดพลาด] " + cYelBold + err.Error() + cReset)
 				waitEnter(r)
 			}
@@ -551,6 +566,236 @@ func openvpnMenu(r *bufio.Reader, svc service.Service) error {
 			time.Sleep(2 * time.Second)
 		}
 	}
+}
+
+// ovpnConfContains checks if /etc/openvpn/server.conf contains a keyword.
+func ovpnConfContains(keyword string) bool {
+	data, err := os.ReadFile("/etc/openvpn/server.conf")
+	if err != nil {
+		return false
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		if strings.TrimSpace(line) == keyword {
+			return true
+		}
+	}
+	return false
+}
+
+// toggleOVPNWeb installs or removes apache2 on port 82 for .ovpn file serving.
+// Mirrors v1 conexao option 3: ◉=/var/www/html exists, ○=absent.
+func toggleOVPNWeb(r *bufio.Reader) {
+	clearScreen()
+	if _, err := os.Stat("/var/www/html"); err == nil {
+		// Currently ON → turn off.
+		paintTitleBar("          OVPN ผ่านลิงก์ (ปิด)         ")
+		fmt.Println()
+		fmt.Print(cRedBold + "กำลังปิด" + cGrnBold + "." + cYelBold + "." + cRedBold + ". " + cYelBold)
+		exec.Command("apt-get", "remove", "-y", "apache2").Run()
+		exec.Command("apt-get", "autoremove", "-y").Run()
+		os.RemoveAll("/var/www/html")
+		fmt.Println("Ok" + cReset)
+	} else {
+		// Currently OFF → turn on.
+		paintTitleBar("          OVPN ผ่านลิงก์ (เปิด)        ")
+		fmt.Println()
+		fmt.Print(cGrnBold + "กำลังเปิด" + cGrnBold + "." + cYelBold + "." + cRedBold + ". " + cYelBold)
+		exec.Command("apt-get", "install", "-y", "apache2", "zip").Run()
+		// Move apache2 to port 82 so it doesn't conflict with other services.
+		if data, err := os.ReadFile("/etc/apache2/ports.conf"); err == nil {
+			newConf := strings.ReplaceAll(string(data), "Listen 80", "Listen 82")
+			_ = os.WriteFile("/etc/apache2/ports.conf", []byte(newConf), 0o644)
+		}
+		exec.Command("service", "apache2", "restart").Run()
+		os.MkdirAll("/var/www/html", 0o755)
+		os.WriteFile("/var/www/html/index.html", []byte(""), 0o644)
+		exec.Command("chmod", "-R", "755", "/var/www").Run()
+		exec.Command("service", "apache2", "restart").Run()
+		fmt.Println("Ok" + cReset)
+	}
+	waitEnter(r)
+}
+
+// toggleMultilogin adds or removes duplicate-cn from server.conf + restarts.
+// ◉ = allowed (duplicate-cn present), ○ = blocked (absent).
+func toggleMultilogin(r *bufio.Reader, svc service.Service) {
+	clearScreen()
+	if ovpnConfContains("duplicate-cn") {
+		// Currently ON → turn off (block multilogin).
+		paintTitleBar("          MULTILOGIN OVPN (บล็อก)       ")
+		fmt.Println()
+		fmt.Print(cRedBold + "กำลังบล็อก MULTILOGIN" + cGrnBold + "." + cYelBold + "." + cRedBold + ". " + cYelBold)
+		if data, err := os.ReadFile("/etc/openvpn/server.conf"); err == nil {
+			var lines []string
+			for _, l := range strings.Split(string(data), "\n") {
+				if strings.TrimSpace(l) != "duplicate-cn" {
+					lines = append(lines, l)
+				}
+			}
+			_ = os.WriteFile("/etc/openvpn/server.conf", []byte(strings.Join(lines, "\n")), 0o644)
+		}
+		service.Restart(svc)
+		fmt.Println("Ok" + cReset)
+	} else {
+		// Currently OFF → turn on (allow multilogin).
+		paintTitleBar("         MULTILOGIN OVPN (อนุญาต)      ")
+		fmt.Println()
+		fmt.Print(cGrnBold + "กำลังอนุญาต MULTILOGIN" + cGrnBold + "." + cYelBold + "." + cRedBold + ". " + cYelBold)
+		if data, err := os.ReadFile("/etc/openvpn/server.conf"); err == nil {
+			conf := string(data)
+			if !strings.Contains(conf, "duplicate-cn") {
+				conf = strings.TrimRight(conf, "\n") + "\nduplicate-cn\n"
+				_ = os.WriteFile("/etc/openvpn/server.conf", []byte(conf), 0o644)
+			}
+		}
+		service.Restart(svc)
+		fmt.Println("Ok" + cReset)
+	}
+	waitEnter(r)
+}
+
+// dnsHostMenu mirrors v1's "เปลี่ยน HOST DNS" sub-menu:
+//
+//	[1] เพิ่ม HOST DNS  → add 127.0.0.1 hostname to /etc/hosts
+//	[2] ลบ HOST DNS    → remove a hostname from /etc/hosts
+//	[3] แก้ไขด้วยตนเอง → open /etc/hosts in nano
+//	[0] ย้อนกลับ
+func dnsHostMenu(r *bufio.Reader) error {
+	for {
+		clearScreen()
+		paintTitleBar("         เปลี่ยน HOST DNS           ")
+		fmt.Println()
+		paintOptions([][2]string{
+			{"1", "เพิ่ม HOST DNS"},
+			{"2", "ลบ HOST DNS"},
+			{"3", "แก้ไขด้วยตนเอง"},
+			{"0", "ย้อนกลับ"},
+		})
+		fmt.Println()
+		choice, err := menuPrompt(r)
+		if err != nil {
+			return err
+		}
+		switch choice {
+		case "0", "00":
+			return nil
+		case "1", "01":
+			dnsAddHost(r)
+		case "2", "02":
+			dnsRemoveHost(r)
+		case "3", "03":
+			// Open /etc/hosts in the user's $EDITOR or nano.
+			editor := os.Getenv("EDITOR")
+			if editor == "" {
+				editor = "nano"
+			}
+			fmt.Printf("\n%sกำลังแก้ไขไฟล์ %s/etc/hosts%s\n", cGrnBold, cWhtBold, cReset)
+			fmt.Printf("%sคำเตือน! บันทึกโดยกดปุ่ม %sCtrl+X Y%s\n", cRedBold, cGrnBold, cReset)
+			time.Sleep(2 * time.Second)
+			cmd := exec.Command(editor, "/etc/hosts")
+			cmd.Stdin = os.Stdin
+			cmd.Stdout = os.Stdout
+			cmd.Stderr = os.Stderr
+			_ = cmd.Run()
+			fmt.Println("\n" + cGrnBold + "แก้ไขสำเร็จแล้ว!" + cReset)
+			time.Sleep(2 * time.Second)
+		}
+	}
+}
+
+// dnsAddHost adds "127.0.0.1 <hostname>" to /etc/hosts if not already present.
+func dnsAddHost(r *bufio.Reader) {
+	clearScreen()
+	paintTitleBar("            เพิ่ม Host DNS            ")
+	fmt.Println()
+	// Show current non-localhost custom hosts pointing to 127.0.0.1
+	data, _ := os.ReadFile("/etc/hosts")
+	fmt.Printf("%sรายการ host ปัจจุบัน:%s\n\n", cYelBold, cReset)
+	for _, line := range strings.Split(string(data), "\n") {
+		f := strings.Fields(line)
+		if len(f) >= 2 && f[0] == "127.0.0.1" && f[1] != "localhost" {
+			fmt.Printf("%s%s%s\n", cGrnBold, f[1], cReset)
+		}
+	}
+	fmt.Println()
+	fmt.Print(cYelBold + "ใส่ host ที่ต้องการเพิ่ม" + cWhtBold + " : " + cReset)
+	line, _ := r.ReadString('\n')
+	host := strings.TrimSpace(line)
+	if host == "" {
+		fmt.Println(cRedBold + "\n[!] ค่าว่างเปล่าหรือไม่ถูกต้อง !" + cReset)
+		time.Sleep(2 * time.Second)
+		return
+	}
+	// Check already exists.
+	if strings.Contains(string(data), " "+host) {
+		fmt.Println(cRedBold + "\n[!] host นี้ถูกเพิ่มไว้แล้ว !" + cReset)
+		time.Sleep(2 * time.Second)
+		return
+	}
+	// Insert after line 2 (mirrors v1 sed -i "3i\127.0.0.1 $host").
+	lines := strings.Split(string(data), "\n")
+	newLines := make([]string, 0, len(lines)+1)
+	if len(lines) >= 3 {
+		newLines = append(newLines, lines[:2]...)
+		newLines = append(newLines, "127.0.0.1 "+host)
+		newLines = append(newLines, lines[2:]...)
+	} else {
+		newLines = append(lines, "127.0.0.1 "+host)
+	}
+	_ = os.WriteFile("/etc/hosts", []byte(strings.Join(newLines, "\n")), 0o644)
+	fmt.Println("\n" + cGrnBold + "[✓] เพิ่ม host สำเร็จแล้ว !" + cReset)
+	time.Sleep(2 * time.Second)
+}
+
+// dnsRemoveHost removes a 127.0.0.1 host entry from /etc/hosts.
+func dnsRemoveHost(r *bufio.Reader) {
+	clearScreen()
+	paintTitleBar("            ลบ Host DNS            ")
+	data, err := os.ReadFile("/etc/hosts")
+	if err != nil {
+		fmt.Println(cRedBold + "อ่าน /etc/hosts ไม่ได้" + cReset)
+		time.Sleep(2 * time.Second)
+		return
+	}
+	// Collect custom 127.0.0.1 entries.
+	var hosts []string
+	for _, line := range strings.Split(string(data), "\n") {
+		f := strings.Fields(line)
+		if len(f) >= 2 && f[0] == "127.0.0.1" && f[1] != "localhost" {
+			hosts = append(hosts, f[1])
+		}
+	}
+	if len(hosts) == 0 {
+		fmt.Println("\n" + cYelBold + "ไม่มี host ที่จะลบ" + cReset)
+		time.Sleep(2 * time.Second)
+		return
+	}
+	fmt.Printf("%sรายการ host ปัจจุบัน:%s\n\n", cYelBold, cReset)
+	for i, h := range hosts {
+		fmt.Printf("%s[%s%d%s] %s- %s%s%s\n",
+			cYelBold, cRedBold, i+1, cYelBold, cWhtBold, cGrnBold, h, cReset)
+	}
+	fmt.Println()
+	fmt.Printf("%sเลือก host ที่ต้องการลบ [1-%d]%s: ", cGrnBold, len(hosts), cReset)
+	line, _ := r.ReadString('\n')
+	idx, convErr := strconv.Atoi(strings.TrimSpace(line))
+	if convErr != nil || idx < 1 || idx > len(hosts) {
+		fmt.Println(cRedBold + "[!] กรุณาเลือกให้ถูกต้อง !" + cReset)
+		time.Sleep(2 * time.Second)
+		return
+	}
+	target := hosts[idx-1]
+	var newLines []string
+	for _, l := range strings.Split(string(data), "\n") {
+		f := strings.Fields(l)
+		if len(f) >= 2 && f[0] == "127.0.0.1" && f[1] == target {
+			continue
+		}
+		newLines = append(newLines, l)
+	}
+	_ = os.WriteFile("/etc/hosts", []byte(strings.Join(newLines, "\n")), 0o644)
+	fmt.Println("\n" + cRedBold + "[✓] ลบ host สำเร็จแล้ว !" + cReset)
+	time.Sleep(2 * time.Second)
 }
 
 func openvpnInstall(r *bufio.Reader, svc service.Service) error {
