@@ -137,23 +137,36 @@ func runProxies(r *bufio.Reader) error {
 	}
 }
 
-// paintSocksList prints the 3 slots with ◉/○ and port label — v1 style.
+// slotEntries returns all DB entries that belong to slot s.
+// Matches key == s.key (legacy) or strings.HasPrefix(key, s.key+"-").
+func slotEntries(db *proxy.DB, s *proxySlot) []proxy.Config {
+	var out []proxy.Config
+	for _, cfg := range db.All() {
+		if cfg.Name == s.key || strings.HasPrefix(cfg.Name, s.key+"-") {
+			out = append(out, cfg)
+		}
+	}
+	return out
+}
+
+// paintSocksList prints each slot with all active ports (multi-port aware).
 func paintSocksList(db *proxy.DB) {
 	for _, s := range proxySlots {
-		cfg, exists := db.Proxies[s.key]
-		up := false
-		if exists {
-			up, _ = service.ListenStatus(cfg.Port, "tcp")
+		entries := slotEntries(db, &s)
+		if len(entries) == 0 {
+			fmt.Printf("  \033[1;31m○\033[0m \033[1;33m%s\033[0m\n", s.label)
+			continue
 		}
-		var marker, portLabel string
-		if up {
-			marker = "\033[1;32m◉\033[0m"
-			portLabel = " \033[1;36m(พอร์ต: " + strconv.Itoa(cfg.Port) + ")\033[0m"
-		} else {
-			marker = "\033[1;31m○\033[0m"
-			portLabel = ""
+		var ports []string
+		for _, e := range entries {
+			up, _ := service.ListenStatus(e.Port, "tcp")
+			marker := "\033[1;32m◉\033[0m"
+			if !up {
+				marker = "\033[1;31m○\033[0m"
+			}
+			ports = append(ports, marker+" \033[1;36m"+strconv.Itoa(e.Port)+"\033[0m")
 		}
-		fmt.Printf("  %s \033[1;33m%s%s\033[0m\n", marker, s.label, portLabel)
+		fmt.Printf("  \033[1;33m%s\033[0m  %s\n", s.label, strings.Join(ports, "  "))
 	}
 }
 
@@ -175,41 +188,76 @@ func paintSocksMenu() {
 	fmt.Print("\033[1;32mเลือกตัวเลือก \033[1;33m?\033[1;37m ")
 }
 
-// proxyToggle turns a slot ON (install) or OFF (remove) based on current state.
+// proxyToggle shows a submenu: add new port OR remove an existing one.
 func proxyToggle(r *bufio.Reader, db *proxy.DB, s *proxySlot) {
-	cfg, exists := db.Proxies[s.key]
-	running := false
-	if exists {
-		running, _ = service.ListenStatus(cfg.Port, "tcp")
+	entries := slotEntries(db, s)
+	clearScreen()
+	fmt.Println("\033[44;1;37m             " + s.label + "              \033[0m")
+	fmt.Println()
+
+	if len(entries) == 0 {
+		// No instances yet — go straight to install.
+		if err := proxyInstall(r, db, s); err != nil {
+			fmt.Println("\n" + cRedBold + "[ผิดพลาด] " + cYelBold + err.Error() + cReset)
+			waitEnter(r)
+		}
+		return
 	}
 
-	clearScreen()
-	if running {
-		// --- TURN OFF ---
-		fmt.Println("\033[41;1;37m             " + s.label + "              \033[0m")
-		fmt.Println()
-		unitName := cfg.UnitName()
-		_ = progress.Run([]progress.Step{
-			{Label: "ปิด + ลบ " + s.label, Work: func() error {
-				if err := systemctlRun("disable", "--now", unitName); err != nil {
-					return err
-				}
-				_, _, _, _ = proxy.RemoveUnit(cfg)
-				delete(db.Proxies, s.key)
-				return db.Save()
-			}},
-		})
-		fmt.Println("\n" + cGrnBold + "ปิด " + s.label + " สำเร็จแล้ว!" + cReset)
-		waitEnter(r)
-	} else {
-		// --- TURN ON ---
+	// Show existing ports with status.
+	for i, e := range entries {
+		up, _ := service.ListenStatus(e.Port, "tcp")
+		marker := cGrnBold + "◉" + cReset
+		if !up {
+			marker = cRedBold + "○" + cReset
+		}
+		fmt.Printf("%s[%s%d%s] %s ลบพอร์ต %s%d%s\n",
+			cRedBold, cCyanBold, i+1, cRedBold, marker, cWhtBold, e.Port, cReset)
+	}
+	addIdx := len(entries) + 1
+	fmt.Printf("%s[%s%d%s] %s• %sเพิ่มพอร์ต %s ใหม่%s\n",
+		cRedBold, cCyanBold, addIdx, cRedBold, cWhtBold, cYelBold, s.label, cReset)
+	fmt.Printf("%s[%s0%s] %s• %sย้อนกลับ%s\n",
+		cRedBold, cCyanBold, cRedBold, cWhtBold, cYelBold, cReset)
+	fmt.Println()
+
+	choice, _ := menuPrompt(r)
+	n, _ := strconv.Atoi(strings.TrimSpace(choice))
+
+	switch {
+	case n == 0:
+		return
+	case n == addIdx:
+		clearScreen()
 		fmt.Println("\033[44;1;37m             " + s.label + "              \033[0m")
 		fmt.Println()
 		if err := proxyInstall(r, db, s); err != nil {
 			fmt.Println("\n" + cRedBold + "[ผิดพลาด] " + cYelBold + err.Error() + cReset)
 			waitEnter(r)
 		}
+	case n >= 1 && n <= len(entries):
+		proxyRemoveEntry(r, db, entries[n-1])
 	}
+}
+
+// proxyRemoveEntry stops and removes one proxy instance.
+func proxyRemoveEntry(r *bufio.Reader, db *proxy.DB, cfg proxy.Config) {
+	clearScreen()
+	fmt.Printf("\033[41;1;37m  ลบพอร์ต %d (%s)  \033[0m\n\n", cfg.Port, cfg.Name)
+
+	unitName := cfg.UnitName()
+	_ = progress.Run([]progress.Step{
+		{Label: fmt.Sprintf("ปิด + ลบ proxy พอร์ต %d", cfg.Port), Work: func() error {
+			if err := systemctlRun("disable", "--now", unitName); err != nil {
+				return err
+			}
+			_, _, _, _ = proxy.RemoveUnit(cfg)
+			delete(db.Proxies, cfg.Name)
+			return db.Save()
+		}},
+	})
+	fmt.Printf("\n"+cGrnBold+"ลบพอร์ต %d สำเร็จแล้ว!"+cReset+"\n", cfg.Port)
+	waitEnter(r)
 }
 
 // proxyInstall runs the full install flow: port → host → code → msg → start.
@@ -289,8 +337,9 @@ func proxyInstall(r *bufio.Reader, db *proxy.DB, s *proxySlot) error {
 		msg = defaultMsg
 	}
 
+	// Key: "{type}-{port}" so multiple instances of the same type coexist.
 	cfg := proxy.Config{
-		Name:        s.key,
+		Name:        s.key + "-" + strconv.Itoa(port),
 		Port:        port,
 		DefaultHost: host,
 		StatusCode:  statusCode,
@@ -407,7 +456,7 @@ func proxyOpenPort(r *bufio.Reader, db *proxy.DB) {
 }
 
 // proxyChangeStatus (options 5/6): lets the operator set a custom status
-// message + font color — mirrors v1's fun_msgsocks / fun_msgwssocks.
+// message + font color. When multiple instances exist, asks which one.
 func proxyChangeStatus(r *bufio.Reader, db *proxy.DB, s *proxySlot) {
 	clearScreen()
 	printSep()
@@ -415,13 +464,32 @@ func proxyChangeStatus(r *bufio.Reader, db *proxy.DB, s *proxySlot) {
 	printSep()
 	fmt.Println()
 
-	cfg, exists := db.Proxies[s.key]
-	if !exists {
+	entries := slotEntries(db, s)
+	if len(entries) == 0 {
 		fmt.Println(cRedBold + "ฟังก์ชันไม่พร้อมใช้งาน" + cReset)
 		fmt.Println()
 		fmt.Println(cYelBold + "กรุณาเปิดใช้งาน " + s.label + " ก่อน !" + cReset)
 		waitEnter(r)
 		return
+	}
+
+	var cfg proxy.Config
+	if len(entries) == 1 {
+		cfg = entries[0]
+	} else {
+		// Multiple instances — ask which port.
+		for i, e := range entries {
+			fmt.Printf("%s[%s%d%s] %s• %sพอร์ต %d%s\n",
+				cRedBold, cCyanBold, i+1, cRedBold, cWhtBold, cYelBold, e.Port, cReset)
+		}
+		fmt.Println()
+		choice, _ := menuPrompt(r)
+		n, _ := strconv.Atoi(strings.TrimSpace(choice))
+		if n < 1 || n > len(entries) {
+			return
+		}
+		cfg = entries[n-1]
+		fmt.Println()
 	}
 
 	fmt.Printf(cYelBold+"สถานะปัจจุบัน: "+cGrnBold+"%s\n\n"+cReset, cfg.StatusMsg)
