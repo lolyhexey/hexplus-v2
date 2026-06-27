@@ -14,6 +14,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"strconv"
 	"strings"
 	"time"
@@ -535,12 +536,13 @@ func openvpnInstall(r *bufio.Reader, svc service.Service) error {
 	// ---- ถาม DNS ----
 	fmt.Println()
 	dnsOptions := [][2]string{
-		{"1", "ระบบ"},
+		{"1", "ระบบ (System resolvers)"},
 		{"2", "Google (แนะนำ)"},
 		{"3", "OpenDNS"},
 		{"4", "Cloudflare"},
 		{"5", "Hurricane Electric"},
 		{"6", "Verisign"},
+		{"7", "DNS Performance"},
 	}
 	for _, o := range dnsOptions {
 		fmt.Printf(cRedBold+"["+cCyanBold+"%s"+cRedBold+"] "+cYelBold+"%s\n"+cReset, o[0], o[1])
@@ -601,6 +603,10 @@ func openvpnInstall(r *bufio.Reader, svc service.Service) error {
 	}
 	fmt.Println(cGrnBold + "  + " + cWhtBold + "/etc/openvpn/server.conf" + cReset)
 
+	// ---- IP forwarding + iptables SNAT (mirrors v1 conexao lines 1358-1384) ----
+	setupNetworking(port, proto, ipLine)
+	fmt.Println(cGrnBold + "  + " + cWhtBold + "IP forwarding + iptables SNAT" + cReset)
+
 	// ---- start ----
 	_ = service.Enable(svc)
 	if err := service.Start(svc); err != nil {
@@ -627,6 +633,81 @@ func openvpnInstall(r *bufio.Reader, svc service.Service) error {
 	}
 	waitEnter(r)
 	return nil
+}
+
+// setupNetworking enables IP forwarding and adds iptables SNAT so OpenVPN
+// clients can reach the internet. Mirrors v1 conexao lines 1358-1384.
+// Failures are non-fatal — logged to stderr, installer continues.
+func setupNetworking(port int, proto, serverIP string) {
+	// 1. Enable IP forwarding immediately.
+	_ = os.WriteFile("/proc/sys/net/ipv4/ip_forward", []byte("1\n"), 0o644)
+
+	// 2. Persist in /etc/sysctl.conf.
+	if raw, err := os.ReadFile("/etc/sysctl.conf"); err == nil {
+		content := string(raw)
+		const key = "net.ipv4.ip_forward"
+		if strings.Contains(content, key) {
+			var lines []string
+			for _, l := range strings.Split(content, "\n") {
+				if strings.Contains(l, key) {
+					lines = append(lines, key+"=1")
+				} else {
+					lines = append(lines, l)
+				}
+			}
+			_ = os.WriteFile("/etc/sysctl.conf", []byte(strings.Join(lines, "\n")), 0o644)
+		} else {
+			f, err := os.OpenFile("/etc/sysctl.conf", os.O_APPEND|os.O_WRONLY, 0o644)
+			if err == nil {
+				_, _ = f.WriteString("\nnet.ipv4.ip_forward=1\n")
+				_ = f.Close()
+			}
+		}
+	}
+
+	// 3. iptables SNAT — let VPN clients reach the internet.
+	exec.Command("iptables", "-t", "nat", "-A", "POSTROUTING",
+		"-s", "10.8.0.0/16", "-j", "SNAT", "--to", serverIP).Run()
+
+	// 4. Open the VPN port + allow forwarding if a DROP/REJECT policy exists.
+	out, _ := exec.Command("iptables", "-L", "-n").Output()
+	if strings.Contains(string(out), "REJECT") || strings.Contains(string(out), "DROP") {
+		exec.Command("iptables", "-I", "INPUT", "-p", proto,
+			"--dport", strconv.Itoa(port), "-j", "ACCEPT").Run()
+		exec.Command("iptables", "-I", "FORWARD",
+			"-s", "10.8.0.0/16", "-j", "ACCEPT").Run()
+		exec.Command("iptables", "-I", "FORWARD",
+			"-m", "state", "--state", "RELATED,ESTABLISHED", "-j", "ACCEPT").Run()
+	}
+
+	// 5. Persist iptables rules across reboots via rc.local.
+	rclocal := "/etc/rc.local"
+	if _, err := os.Stat(rclocal); os.IsNotExist(err) {
+		_ = os.WriteFile(rclocal, []byte("#!/bin/sh -e\nexit 0\n"), 0o755)
+	}
+	rules := []string{
+		"echo 1 > /proc/sys/net/ipv4/ip_forward",
+		fmt.Sprintf("iptables -t nat -A POSTROUTING -s 10.8.0.0/16 -j SNAT --to %s", serverIP),
+	}
+	if raw, err := os.ReadFile(rclocal); err == nil {
+		content := string(raw)
+		var extra []string
+		for _, rule := range rules {
+			if !strings.Contains(content, rule) {
+				extra = append(extra, rule)
+			}
+		}
+		if len(extra) > 0 {
+			// Insert before the final line (usually "exit 0").
+			lines := strings.Split(strings.TrimRight(content, "\n"), "\n")
+			insertAt := len(lines)
+			if insertAt > 0 {
+				insertAt-- // before last line
+			}
+			newLines := append(lines[:insertAt], append(extra, lines[insertAt:]...)...)
+			_ = os.WriteFile(rclocal, []byte(strings.Join(newLines, "\n")+"\n"), 0o755)
+		}
+	}
 }
 
 func readOpenVPNPort(svc service.Service) int {
