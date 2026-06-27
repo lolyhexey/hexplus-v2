@@ -412,6 +412,10 @@ func ensureSSHConfig() {
 	} {
 		conf, changed = ensureSSHDirective(conf, kv[0], kv[1], changed)
 	}
+	// /bin/false must be in /etc/shells so PAM (pam_shells) lets users with
+	// that shell log in via SSH. v1 conexao:481 does the same on dropbear install.
+	ensureFalseShell()
+
 	if !changed {
 		return
 	}
@@ -419,6 +423,25 @@ func ensureSSHConfig() {
 		return
 	}
 	restartSSH()
+}
+
+// ensureFalseShell adds /bin/false to /etc/shells when absent.
+func ensureFalseShell() {
+	data, err := os.ReadFile("/etc/shells")
+	if err != nil {
+		return
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		if strings.TrimSpace(line) == "/bin/false" {
+			return
+		}
+	}
+	f, err := os.OpenFile("/etc/shells", os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	_, _ = f.WriteString("/bin/false\n")
 }
 
 // ensureSSHDirective guarantees that exactly one line "key val" exists in
