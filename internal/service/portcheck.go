@@ -11,8 +11,8 @@ package service
 import (
 	"bufio"
 	"errors"
+	"fmt"
 	"os"
-	"strconv"
 	"strings"
 )
 
@@ -96,6 +96,8 @@ func scanProcNet(f *os.File, wantHex string, isTCP bool) (bool, error) {
 }
 
 // formatPortHex turns 8080 into "1F90", the layout /proc/net uses.
+// /proc/net always pads to 4 hex digits (e.g. port 82 → "0052"), so we
+// must pad too or the comparison misses ports below 0x1000.
 func formatPortHex(port int) string {
-	return strings.ToUpper(strconv.FormatInt(int64(port), 16))
+	return strings.ToUpper(fmt.Sprintf("%04X", port))
 }
