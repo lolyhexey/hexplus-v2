@@ -53,10 +53,6 @@ const (
 type Handler struct {
 	cfg Config
 
-	// allowedPrefixes is cfg.AllowedHosts flattened to lowercase for
-	// case-insensitive startswith matching. Set once at New time.
-	allowedPrefixes []string
-
 	// responseBytes is the fully-baked HTTP/1.x status line we send
 	// back to the client once we've opened the upstream. Built at
 	// New() so the hot path doesn't restring it per connection.
@@ -77,14 +73,7 @@ func NewHandler(cfg Config) (*Handler, error) {
 	if cfg.StatusMsg == "" {
 		cfg.StatusMsg = "Connection established"
 	}
-	if len(cfg.AllowedHosts) == 0 {
-		cfg.AllowedHosts = defaultAllowedHosts
-	}
-
 	h := &Handler{cfg: cfg}
-	for _, p := range cfg.AllowedHosts {
-		h.allowedPrefixes = append(h.allowedPrefixes, strings.ToLower(p))
-	}
 	// expandEscapes turns the literal '\r\n' / '\n' the caller stored
 	// in JSON back into real CRLF, matching what the Python proxies did
 	// with str.replace('\\r\\n','\r\n').
@@ -93,11 +82,6 @@ func NewHandler(cfg Config) (*Handler, error) {
 	return h, nil
 }
 
-// defaultAllowedHosts is the set v1's Python scripts whitelisted.
-// '0.0.0.0' is the open.py default because OpenVPN's bind, '127.0.0.1'
-// covers proxy.py / wsproxy.py, 'localhost' is the hostname people
-// type from time to time.
-var defaultAllowedHosts = []string{"127.0.0.1", "0.0.0.0", "localhost"}
 
 // Serve runs the accept loop until ctx is done or the listener errors
 // fatally. Each accepted connection runs handleConn in its own
@@ -164,13 +148,6 @@ func (h *Handler) handleConn(client net.Conn) {
 		hostPort = h.cfg.DefaultHost
 	}
 
-	// Defensive: refuse upstreams the operator didn't whitelist so the
-	// proxy can't be turned into an open relay for arbitrary hosts.
-	if !h.hostAllowed(hostPort) {
-		_, _ = client.Write([]byte("HTTP/1.1 403 Forbidden\r\n\r\n"))
-		return
-	}
-
 	// Dial upstream.
 	dialCtx, cancel := context.WithTimeout(context.Background(), dialTimeout)
 	defer cancel()
@@ -213,19 +190,6 @@ func (h *Handler) handleConn(client net.Conn) {
 	}()
 	<-done
 	<-done
-}
-
-// hostAllowed returns true when the upstream the client asked for starts
-// with one of the configured prefixes. Case-insensitive on host (port
-// numbers are always ASCII digits so case doesn't matter there).
-func (h *Handler) hostAllowed(hostPort string) bool {
-	lower := strings.ToLower(hostPort)
-	for _, p := range h.allowedPrefixes {
-		if strings.HasPrefix(lower, p) {
-			return true
-		}
-	}
-	return false
 }
 
 // tuneTCP disables Nagle's algorithm and enables TCP keepalive on the
