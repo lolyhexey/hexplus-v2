@@ -157,16 +157,24 @@ func paintSocksList(db *proxy.DB) {
 			fmt.Printf("  \033[1;31m○\033[0m \033[1;33m%s\033[0m\n", s.label)
 			continue
 		}
+		anyUp := false
 		var ports []string
 		for _, e := range entries {
 			up, _ := service.ListenStatus(e.Port, "tcp")
-			marker := "\033[1;32m◉\033[0m"
-			if !up {
-				marker = "\033[1;31m○\033[0m"
+			if up {
+				anyUp = true
 			}
-			ports = append(ports, marker+" \033[1;36m"+strconv.Itoa(e.Port)+"\033[0m")
+			m := "\033[1;32m◉\033[0m"
+			if !up {
+				m = "\033[1;31m○\033[0m"
+			}
+			ports = append(ports, m+" \033[1;36m"+strconv.Itoa(e.Port)+"\033[0m")
 		}
-		fmt.Printf("  \033[1;33m%s\033[0m  %s\n", s.label, strings.Join(ports, "  "))
+		slotM := "\033[1;32m◉\033[0m"
+		if !anyUp {
+			slotM = "\033[1;31m○\033[0m"
+		}
+		fmt.Printf("  %s \033[1;33m%s\033[0m  %s\n", slotM, s.label, strings.Join(ports, "  "))
 	}
 }
 
