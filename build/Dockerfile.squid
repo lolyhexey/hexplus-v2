@@ -1,4 +1,4 @@
-# Build full-feature Squid 3.3.8 statically against glibc.
+# Build full-feature Squid 3.3.8 against Ubuntu 20.04 glibc (2.31).
 #
 # Background:
 #  The original Alpine + musl static build crashed at runtime on real
@@ -7,25 +7,25 @@
 #  configure flags. Root cause is musl's libc layout vs Squid 3.3.8's
 #  assumptions (Squid 3.3.8 is from 2013, written against glibc 2.x).
 #
-#  The fix here keeps the v1 feature surface (eCAP, LDAP, Berkeley DB,
-#  full helper set) by switching the base image to Debian 12 so we
-#  build against glibc throughout. Final binary uses `-static` so it
-#  still drops onto a bare VPS without runtime dependencies. Binary
-#  size goes from ~5 MB (musl) to ~10-13 MB (static-glibc + helpers).
+#  We build on Ubuntu 20.04 (GLIBC 2.31) so the resulting binary only
+#  requires symbols available on Ubuntu 20.04+. Ubuntu 22.04 (GLIBC 2.35)
+#  is a superset, so the binary runs on both without needing a truly static
+#  build. A static glibc build was attempted (Debian 12 + -static) but
+#  libstdc++ and libgcc_s were still pulled in dynamically, pinning the
+#  binary to GLIBC 2.34+ symbols from the Bookworm toolchain.
 
-ARG DEBIAN_VERSION=12-slim
+ARG UBUNTU_VERSION=20.04
 ARG SQUID_VERSION=3.3.8
 ARG OPENSSL_VERSION=1.0.2u
 
 # =====================================================================
-# STAGE openssl: OpenSSL 1.0.2u on Debian glibc
+# STAGE openssl: OpenSSL 1.0.2u on Ubuntu 20.04 glibc
 #
-# Squid 3.3.8 SSL APIs were written for OpenSSL 1.0.x. Modern Debian
-# ships OpenSSL 3.x which removed those symbols (SSL_CTX_set_ssl_version,
-# the err_ macros, etc.), so we build 1.0.2u from source and link Squid
-# against it.
+# Squid 3.3.8 SSL APIs were written for OpenSSL 1.0.x. Ubuntu 20.04
+# ships OpenSSL 1.1.x which removed the APIs we need, so we build
+# 1.0.2u from source and link Squid against it.
 
-FROM debian:${DEBIAN_VERSION} AS openssl
+FROM ubuntu:${UBUNTU_VERSION} AS openssl
 ARG OPENSSL_VERSION
 ARG TARGETARCH
 RUN apt-get update -qq \
@@ -61,7 +61,7 @@ RUN case "${TARGETARCH}" in \
 # rejects it (requires `libecap < 0.3`, ABI changed between 0.x and 1.0).
 # Build the original 0.2.0 from source so --enable-ecap works.
 
-FROM debian:${DEBIAN_VERSION} AS ecap
+FROM ubuntu:${UBUNTU_VERSION} AS ecap
 RUN apt-get update -qq \
     && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
         curl ca-certificates build-essential autoconf automake libtool pkg-config \
@@ -91,17 +91,19 @@ RUN ./configure --prefix=/opt/ecap --enable-shared=no --enable-static=yes \
 # glibc-compatible form. libecap is special: Debian's is too new, so
 # we copy our 0.2.0 build in from the ecap stage above.
 
-FROM debian:${DEBIAN_VERSION} AS squid
+FROM ubuntu:${UBUNTU_VERSION} AS squid
 ARG SQUID_VERSION
 ARG TARGETARCH
 
+ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update -qq \
-    && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
+    && apt-get install -y -qq \
         curl ca-certificates \
         build-essential autoconf automake libtool pkg-config gawk \
         libpam0g-dev libldap2-dev libdb-dev \
         libltdl-dev libsasl2-dev libxml2-dev libexpat1-dev \
         libcap-dev libpcre3-dev \
+        libgcc-s1 libstdc++-9-dev \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=openssl /opt/ossl10 /opt/ossl10
@@ -217,9 +219,7 @@ RUN ./configure \
         && cat config.log | tail -100 \
         && exit 1)
 
-# Pass -static at make time (not configure) so the configure-time link
-# probes don't pick up Debian's dynamic-only libs and fail.
-RUN make -j"$(nproc)" LDFLAGS="-static -L/opt/ossl10/lib" \
+RUN make -j"$(nproc)" LDFLAGS="-static -L/opt/ossl10/lib -L/opt/ecap/lib" \
     || (echo "============ MAKE FAILED ============" \
         && exit 1)
 
