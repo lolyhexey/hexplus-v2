@@ -112,16 +112,7 @@ With no subcommand, hexplus prints a banner and, on first run as root, auto-inst
 }
 
 func runDefault() {
-	// Default action when installed: drop straight into the TUI. That's
-	// what HEXPLUS v1 customers expect from typing `menu` at a shell.
-	if install.IsInstalled() {
-		runMenu()
-		return
-	}
-	fmt.Println(version.Full())
-	fmt.Printf("running on %s/%s\n\n", runtime.GOOS, runtime.GOARCH)
-	fmt.Println("hexplus has not been installed on this box yet.")
-	fmt.Println("Run 'sudo hexplus install' to lay down the embedded binaries.")
+	runMenu()
 }
 
 // runMenu launches the v1-identical plain REPL menu (no altscreen, no
