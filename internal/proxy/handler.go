@@ -228,14 +228,21 @@ func (h *Handler) handleConn(client net.Conn) {
 // connection. Interactive workloads (SSH, web) get sub-millisecond
 // instead of 40-200 ms per tiny packet; idle tunnels get reaped within
 // a couple of minutes instead of hanging at 2 hours.
+//
+// Keepalive params match v1 Python proxies exactly (KEEPIDLE=30 /
+// KEEPINTVL=10 / KEEPCNT=3 → dead connection detected in ≈60 s).
 func tuneTCP(c net.Conn) {
 	tc, ok := c.(*net.TCPConn)
 	if !ok {
 		return
 	}
 	_ = tc.SetNoDelay(true)
-	_ = tc.SetKeepAlive(true)
-	_ = tc.SetKeepAlivePeriod(30 * time.Second)
+	_ = tc.SetKeepAliveConfig(net.KeepAliveConfig{
+		Enable:   true,
+		Idle:     30 * time.Second,
+		Interval: 10 * time.Second,
+		Count:    3,
+	})
 }
 
 // findHeader locates 'X-Real-Host:' in the initial buffer and returns
