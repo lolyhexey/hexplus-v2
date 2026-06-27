@@ -313,13 +313,21 @@ func proxyInstall(r *bufio.Reader, db *proxy.DB, s *proxySlot) error {
 			" " + s.label + " เริ่มทำงานไม่สำเร็จ: " + err.Error() + cReset)
 		return nil
 	}
-	time.Sleep(700 * time.Millisecond)
-	if up, _ := service.ListenStatus(port, "tcp"); up {
+	// Retry up to 4s — systemctl returns before the socket is actually bound.
+	up := false
+	for i := 0; i < 8; i++ {
+		time.Sleep(500 * time.Millisecond)
+		if ok, _ := service.ListenStatus(port, "tcp"); ok {
+			up = true
+			break
+		}
+	}
+	if up {
 		fmt.Println(cGrnBold + "เปิดใช้งาน SOCKS สำเร็จแล้ว" + cReset)
 	} else {
 		fmt.Println(cRedBold + "[ผิดพลาด]" + cYelBold +
 			" PROXY SOCKS เริ่มทำงานไม่สำเร็จบนพอร์ต " + strconv.Itoa(port) +
-			": ไม่พบ socket ใน LISTEN — ตรวจสอบ journalctl -u " + unitName + cReset)
+			" — ตรวจสอบ: journalctl -u " + unitName + cReset)
 	}
 	time.Sleep(2 * time.Second)
 	return nil
