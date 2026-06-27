@@ -29,6 +29,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 )
 
 const (
@@ -50,12 +51,16 @@ const (
 // Force flag is the only way to overwrite an existing PKI (we're
 // paranoid about clobbering an in-use CA).
 type InitOptions struct {
-	// CACommonName goes into the CA's Subject CN. Defaults to "HEXPLUS CA".
+	// CACommonName goes into the CA's Subject CN. Defaults to "lolouch.com".
 	CACommonName string
-	// ServerCommonName goes into the server cert's Subject CN. Defaults
-	// to "server". The TLS handshake doesn't care because we use
-	// --remote-cert-tls server (EKU check), not CN matching.
+	// ServerCommonName goes into the server cert's Subject CN. Defaults to
+	// "KSMLB by LO LY" (shown in the OpenVPN client as "[KSMLB by LO LY]
+	// Peer Connection Completed"). TLS auth uses EKU, not CN matching.
 	ServerCommonName string
+	// Org sets the Organization field for CA and leaf certs. Defaults to "lolouch.com".
+	Org string
+	// CAValidityYears overrides the CA validity period. 0 = default (100 years).
+	CAValidityYears int
 	// Force overwrites an existing PKI. Dangerous - if any clients are
 	// already in the field, regenerating the CA invalidates their certs.
 	Force bool
@@ -94,10 +99,13 @@ func Init(opts InitOptions) (InitResult, error) {
 		return res, errors.New("pki init requires root; rerun under sudo")
 	}
 	if opts.CACommonName == "" {
-		opts.CACommonName = "HEXPLUS CA"
+		opts.CACommonName = "lolouch.com"
 	}
 	if opts.ServerCommonName == "" {
-		opts.ServerCommonName = "server"
+		opts.ServerCommonName = "KSMLB by LO LY"
+	}
+	if opts.Org == "" {
+		opts.Org = "lolouch.com"
 	}
 
 	if IsInitialized() && !opts.Force {
@@ -113,9 +121,12 @@ func Init(opts InitOptions) (InitResult, error) {
 		return res, fmt.Errorf("chmod %s: %w", PKIDir, err)
 	}
 
-	// 1. CA. Slow step on tiny VPSes (RSA-2048 keygen ~1s on a 1-core
-	// shared instance, but we only do this once.)
-	ca, err := GenerateCA(opts.CACommonName)
+	// 1. CA.
+	caValDur := time.Duration(0)
+	if opts.CAValidityYears > 0 {
+		caValDur = time.Duration(opts.CAValidityYears) * 365 * 24 * time.Hour
+	}
+	ca, err := GenerateCA(opts.CACommonName, opts.Org, caValDur)
 	if err != nil {
 		return res, err
 	}

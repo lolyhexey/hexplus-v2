@@ -19,6 +19,9 @@ import (
 	"strings"
 	"time"
 
+	"io/fs"
+
+	"github.com/lolyhexey/hexplus/internal/assets"
 	"github.com/lolyhexey/hexplus/internal/pki"
 	"github.com/lolyhexey/hexplus/internal/service"
 )
@@ -917,9 +920,10 @@ func openvpnInstall(r *bufio.Reader, svc service.Service) error {
 
 	// ---- init PKI (CA + server cert + ta.key) ----
 	fmt.Println()
-	if !pki.IsInitialized() {
-		fmt.Println(cGrnBold + "กำลังสร้าง PKI (CA, cert, ta.key)..." + cReset)
-		pkiRes, pkiErr := pki.Init(pki.InitOptions{})
+	if pki.IsInitialized() {
+		fmt.Println(cYelBold + "  PKI มีอยู่แล้ว ข้ามขั้นตอนนี้" + cReset)
+	} else {
+		pkiRes, pkiErr := openvpnSetupPKI(r)
 		if pkiErr != nil {
 			fmt.Println(cRedBold + "[ผิดพลาด] PKI: " + cYelBold + pkiErr.Error() + cReset)
 			waitEnter(r)
@@ -928,8 +932,6 @@ func openvpnInstall(r *bufio.Reader, svc service.Service) error {
 		for _, p := range pkiRes.Written {
 			fmt.Println(cGrnBold + "  + " + cWhtBold + p + cReset)
 		}
-	} else {
-		fmt.Println(cYelBold + "  PKI มีอยู่แล้ว ข้ามขั้นตอนนี้" + cReset)
 	}
 
 	// ---- เขียน server.conf ด้วยค่าจริง ----
@@ -1068,6 +1070,81 @@ func setupNetworking(port int, proto, serverIP string) {
 			_ = os.WriteFile(rclocal, []byte(strings.Join(newLines, "\n")+"\n"), 0o755)
 		}
 	}
+}
+
+// openvpnSetupPKI asks whether to use the embedded CA from git or generate a
+// new custom CA, then initializes the PKI accordingly.
+func openvpnSetupPKI(r *bufio.Reader) (pki.InitResult, error) {
+	clearScreen()
+	printSep()
+	fmt.Println(cGrnBold + " HEXPLUS — ตั้งค่า PKI" + cReset)
+	printSep()
+	fmt.Println(cYelBold + "[1]" + cWhtBold + " ใช้ CA จาก git" +
+		cRedBold + " (CN: lolouch.com, อายุ 100 ปี)" + cYelBold + " — แนะนำ")
+	fmt.Println(cYelBold + "[2]" + cWhtBold + " สร้าง CA ใหม่" +
+		cRedBold + " (ตั้งค่าเอง)")
+	fmt.Print(cGrnBold + "เลือกตัวเลือก " + cYelBold + "?" + cRedBold + "?" + cWhtBold + " " + cReset)
+	line, _ := r.ReadString('\n')
+	choice := strings.TrimSpace(line)
+
+	if choice == "2" {
+		return openvpnSetupPKICustom(r)
+	}
+
+	// Option 1: load embedded CA from assets.
+	pkiFS := assets.PKI()
+	caCert, err := fs.ReadFile(pkiFS, "ca.crt")
+	if err != nil {
+		return pki.InitResult{}, fmt.Errorf("อ่าน embedded ca.crt: %w", err)
+	}
+	caKey, err := fs.ReadFile(pkiFS, "ca.key")
+	if err != nil {
+		return pki.InitResult{}, fmt.Errorf("อ่าน embedded ca.key: %w", err)
+	}
+	taKey, err := fs.ReadFile(pkiFS, "ta.key")
+	if err != nil {
+		return pki.InitResult{}, fmt.Errorf("อ่าน embedded ta.key: %w", err)
+	}
+	fmt.Println()
+	fmt.Println(cGrnBold + "กำลังติดตั้ง CA จาก git..." + cReset)
+	return pki.InstallWithCA(caCert, caKey, taKey, "", true)
+}
+
+// openvpnSetupPKICustom asks for CN, Server CN, org, and validity then
+// generates a fresh CA.
+func openvpnSetupPKICustom(r *bufio.Reader) (pki.InitResult, error) {
+	fmt.Println()
+	fmt.Println(cGrnBold + "— สร้าง CA ใหม่ —" + cReset)
+
+	readField := func(label, example, def string) string {
+		fmt.Printf("%s%s %s(ตัวอย่าง: %s)%s [กด Enter = %s]: ",
+			cYelBold, label, cRedBold, example, cWhtBold, def)
+		line, _ := r.ReadString('\n')
+		v := strings.TrimSpace(line)
+		if v == "" {
+			return def
+		}
+		return v
+	}
+
+	caCN := readField("CA Common Name     ", "lolouch.com", "lolouch.com")
+	serverCN := readField("Server Common Name ", "KSMLB by LO LY", "KSMLB by LO LY")
+	org := readField("Organization       ", "lolouch.com", "lolouch.com")
+	yearsStr := readField("อายุ CA (ปี)        ", "100", "100")
+	years := 100
+	if n, err := strconv.Atoi(yearsStr); err == nil && n > 0 {
+		years = n
+	}
+
+	fmt.Println()
+	fmt.Println(cGrnBold + "กำลังสร้าง PKI (CA, cert, ta.key)..." + cReset)
+	return pki.Init(pki.InitOptions{
+		CACommonName:    caCN,
+		ServerCommonName: serverCN,
+		Org:             org,
+		CAValidityYears: years,
+		Force:           true,
+	})
 }
 
 // ovpnPort reads the port from /etc/openvpn/server.conf, fallback 1194.

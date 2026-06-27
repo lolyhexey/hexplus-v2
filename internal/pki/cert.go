@@ -33,7 +33,7 @@ import (
 
 const (
 	keyBits      = 2048
-	caValidity   = 10 * 365 * 24 * time.Hour
+	caValidity   = 100 * 365 * 24 * time.Hour
 	leafValidity = 10 * 365 * 24 * time.Hour
 )
 
@@ -47,11 +47,17 @@ type Cert struct {
 	KeyPEM  []byte
 }
 
-// GenerateCA produces a self-signed CA whose Subject CN is the provided
-// commonName. Anything that runs `hexplus pki init` and chains certs off
-// this CA is implicitly trusting this single key, so keep it offline
-// where you can (`/etc/openvpn/pki/ca.key` stays root-only).
-func GenerateCA(commonName string) (*Cert, error) {
+// GenerateCA produces a self-signed CA. validity=0 uses the default 100-year
+// constant; pass a positive duration to override (e.g. for the custom-CA TUI
+// option). Anything that chains certs off this CA trusts this single key, so
+// keep ca.key offline where possible.
+func GenerateCA(commonName, org string, validity time.Duration) (*Cert, error) {
+	if org == "" {
+		org = "lolouch.com"
+	}
+	if validity <= 0 {
+		validity = caValidity
+	}
 	key, err := rsa.GenerateKey(rand.Reader, keyBits)
 	if err != nil {
 		return nil, fmt.Errorf("rsa GenerateKey: %w", err)
@@ -65,10 +71,10 @@ func GenerateCA(commonName string) (*Cert, error) {
 		SerialNumber: serial,
 		Subject: pkix.Name{
 			CommonName:   commonName,
-			Organization: []string{"HEXPLUS"},
+			Organization: []string{org},
 		},
-		NotBefore:             now.Add(-1 * time.Hour), // tolerate small clock skew on the issuing box
-		NotAfter:              now.Add(caValidity),
+		NotBefore:             now.Add(-1 * time.Hour),
+		NotAfter:              now.Add(validity),
 		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign | x509.KeyUsageDigitalSignature,
 		BasicConstraintsValid: true,
 		IsCA:                  true,
@@ -117,7 +123,7 @@ func generateLeaf(ca *Cert, commonName string, eku x509.ExtKeyUsage) (*Cert, err
 		SerialNumber: serial,
 		Subject: pkix.Name{
 			CommonName:   commonName,
-			Organization: []string{"HEXPLUS"},
+			Organization: []string{"lolouch.com"},
 		},
 		NotBefore:             now.Add(-1 * time.Hour),
 		NotAfter:              now.Add(leafValidity),

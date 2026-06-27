@@ -28,3 +28,20 @@ func Binaries() fs.FS {
 	}
 	return sub
 }
+
+// pkiFS embeds the canonical CA bundle (ca.crt, ca.key, ta.key) generated
+// once and shared across all VPS instances. All servers using the same CA
+// means one client .ovpn works anywhere without re-exporting.
+//
+//go:embed pki/ca.crt pki/ca.key pki/ta.key
+var pkiFS embed.FS
+
+// PKI returns the embedded PKI subtree (ca.crt, ca.key, ta.key).
+// Callers use fs.ReadFile(assets.PKI(), "ca.crt") etc.
+func PKI() fs.FS {
+	sub, err := fs.Sub(pkiFS, "pki")
+	if err != nil {
+		panic(err)
+	}
+	return sub
+}

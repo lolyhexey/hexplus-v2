@@ -56,6 +56,25 @@ func LoadCA() (*Cert, error) {
 	}, nil
 }
 
+// LoadCAFromPEM parses a CA cert and key from raw PEM bytes (e.g. from
+// embedded assets) without reading from disk. Mirrors LoadCA's return type.
+func LoadCAFromPEM(certPEM, keyPEM []byte) (*Cert, error) {
+	cert, err := parseCertPEM(certPEM)
+	if err != nil {
+		return nil, fmt.Errorf("CA cert PEM: %w", err)
+	}
+	key, err := parseRSAKeyPEM(keyPEM)
+	if err != nil {
+		return nil, fmt.Errorf("CA key PEM: %w", err)
+	}
+	return &Cert{
+		Cert:    cert,
+		Key:     key,
+		CertPEM: certPEM,
+		KeyPEM:  keyPEM,
+	}, nil
+}
+
 // ReadFile is a public-ish helper so the user package can fetch ta.key
 // (which is opaque bytes, not PEM) without duplicating error wrapping.
 func ReadFile(path string) ([]byte, error) {
