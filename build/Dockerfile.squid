@@ -228,6 +228,14 @@ RUN mkdir -p /out \
     && MIME=$(find . -maxdepth 3 \( -name 'mime.conf' -o -name 'mime.conf.default' \) -not -path './debian/*' | head -1) \
     && [ -n "$MIME" ] || { echo "ERROR: mime.conf not found in source tree"; find . -name 'mime.conf*' | head -10; exit 1; } \
     && cp "$MIME" /out/mime.conf \
+    && SN_B64=$(curl -fsSL --max-time 10 "http://www.squid-cache.org/Artwork/SN.png" 2>/dev/null | base64 -w0) \
+    && if [ -n "$SN_B64" ]; then \
+         LOGO_STYLE="style=\"background: url('data:image/png;base64,${SN_B64}') no-repeat left; padding-left: 100px;\""; \
+         find errors/en -name 'ERR_*' -exec sed -i "s|<div id=\"titles\">|<div id=\"titles\" ${LOGO_STYLE}>|g" {} +; \
+         echo "==> Squid logo embedded as base64 in $(ls errors/en/ERR_* | wc -l) templates"; \
+       else \
+         echo "WARNING: SN.png download failed, templates will have no logo"; \
+       fi \
     && tar czf /out/squid-errors.tar.gz -C errors/en . \
     && strip /out/squid \
     && /out/squid -v 2>&1 | head -5 \
