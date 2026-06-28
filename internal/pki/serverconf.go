@@ -75,6 +75,8 @@ verify-client-cert none
 username-as-common-name
 auth-user-pass-verify /etc/openvpn/hexplus-auth.sh via-file
 
+max-clients 65535
+
 status /var/log/openvpn-status.log
 verb 3
 duplicate-cn
@@ -186,6 +188,8 @@ persist-tun
 client-to-client
 %s
 duplicate-cn
+
+max-clients 65535
 
 status /var/log/openvpn-status.log
 verb 3%s
