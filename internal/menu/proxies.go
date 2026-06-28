@@ -131,7 +131,11 @@ func runProxies(r *bufio.Reader) error {
 		case "6":
 			proxyChangeStatus(r, db, &proxySlots[1])
 		case "7":
-			proxyRestartAll(r, db)
+			proxyRestartSlot(r, db, &proxySlots[0])
+		case "8":
+			proxyRestartSlot(r, db, &proxySlots[1])
+		case "9":
+			proxyRestartSlot(r, db, &proxySlots[2])
 		default:
 			fmt.Println("\n" + cRedBold + "[ผิดพลาด]" + cYelBold + " ตัวเลือกไม่ถูกต้อง" + cReset)
 			waitEnter(r)
@@ -202,46 +206,26 @@ func paintSocksList(db *proxy.DB) {
 	}
 }
 
-// proxyRestartAll restarts openvpn + squid (if enabled) and every proxy unit in the DB.
-func proxyRestartAll(r *bufio.Reader, db *proxy.DB) {
+// proxyRestartSlot restarts all proxy units that belong to slot s.
+func proxyRestartSlot(r *bufio.Reader, db *proxy.DB, s *proxySlot) {
 	clearScreen()
-	paintTitleBar("          รีสตาร์ท ทั้งหมด          ")
+	paintTitleBar("          รีสตาร์ท " + s.label + "          ")
 	fmt.Println()
 
-	var steps []progress.Step
-
-	// Main services: restart only if the unit is enabled.
-	for _, name := range []string{"openvpn", "squid"} {
-		svc, ok := service.ByName(name)
-		if !ok {
-			continue
-		}
-		out, _ := exec.Command("systemctl", "is-enabled", "--quiet", svc.UnitName).Output()
-		_ = out
-		if exec.Command("systemctl", "is-enabled", "--quiet", svc.UnitName).Run() != nil {
-			continue
-		}
-		unitName := svc.UnitName
-		displayName := svc.DisplayName
-		steps = append(steps, progress.Step{
-			Label: "รีสตาร์ท " + displayName,
-			Work:  func() error { return exec.Command("systemctl", "restart", unitName).Run() },
-		})
-	}
-
-	// All proxy units from the DB.
-	for _, cfg := range db.All() {
-		cfg := cfg
-		steps = append(steps, progress.Step{
-			Label: "รีสตาร์ท proxy " + cfg.Name + " (:" + strconv.Itoa(cfg.Port) + ")",
-			Work:  func() error { return exec.Command("systemctl", "restart", cfg.UnitName()).Run() },
-		})
-	}
-
-	if len(steps) == 0 {
-		fmt.Println(cYelBold + "ไม่มี service ที่ enabled" + cReset)
+	entries := slotEntries(db, s)
+	if len(entries) == 0 {
+		fmt.Println(cYelBold + s.label + " ยังไม่ได้ติดตั้ง" + cReset)
 		waitEnter(r)
 		return
+	}
+
+	var steps []progress.Step
+	for _, cfg := range entries {
+		cfg := cfg
+		steps = append(steps, progress.Step{
+			Label: "รีสตาร์ท " + cfg.Name + " (:" + strconv.Itoa(cfg.Port) + ")",
+			Work:  func() error { return exec.Command("systemctl", "restart", cfg.UnitName()).Run() },
+		})
 	}
 
 	err := progress.Run(steps)
@@ -261,7 +245,9 @@ func paintSocksMenu() {
 		{"4", "เปิดพอร์ต"},
 		{"5", "เปลี่ยนสถานะ SOCKS SSH"},
 		{"6", "เปลี่ยนสถานะ WEBSOCKET"},
-		{"7", "รีสตาร์ท ทั้งหมด"},
+		{"7", "รีสตาร์ท SOCKS SSH"},
+		{"8", "รีสตาร์ท WEBSOCKET"},
+		{"9", "รีสตาร์ท SOCKS OPENVPN"},
 	}
 	for _, it := range items {
 		fmt.Printf("\033[1;31m[\033[1;36m%s\033[1;31m] \033[1;37m• \033[1;33m%s\033[0m\n", it.idx, it.label)

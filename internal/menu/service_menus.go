@@ -109,6 +109,7 @@ func squidMenu(r *bufio.Reader, svc service.Service) error {
 			{"1", firstLabel},
 			{"2", "เพิ่มพอร์ตพร็อกซี่"},
 			{"3", "ลบพอร์ตพร็อกซี่"},
+			{"4", "รีสตาร์ท SQUID"},
 			{"0", "ย้อนกลับ"},
 		})
 		fmt.Println()
@@ -152,6 +153,13 @@ func squidMenu(r *bufio.Reader, svc service.Service) error {
 				fmt.Println("\n" + cRedBold + "[ผิดพลาด] " + cYelBold + err.Error() + cReset)
 				waitEnter(r)
 			}
+		case "4", "04":
+			if err := service.Restart(svc); err != nil {
+				fmt.Println("\n" + cRedBold + "[ผิดพลาด] " + cYelBold + err.Error() + cReset)
+			} else {
+				fmt.Println("\n" + cGrnBold + "รีสตาร์ท SQUID สำเร็จ" + cReset)
+			}
+			waitEnter(r)
 		default:
 			fmt.Println("\n" + cRedBold + "กรุณาเลือกให้ถูกต้อง..." + cReset)
 			time.Sleep(2 * time.Second)
@@ -474,6 +482,7 @@ func dropbearMenu(r *bufio.Reader, svc service.Service) error {
 		paintOptions([][2]string{
 			{"1", "เปลี่ยนพอร์ต DROPBEAR"},
 			{"2", "ลบ DROPBEAR"},
+			{"3", "รีสตาร์ท DROPBEAR"},
 			{"0", "ย้อนกลับ"},
 		})
 		fmt.Println()
@@ -513,6 +522,13 @@ func dropbearMenu(r *bufio.Reader, svc service.Service) error {
 			fmt.Println("\n" + cGrnBold + "ลบ DROPBEAR สำเร็จแล้ว" + cReset)
 			waitEnter(r)
 			return nil
+		case "3", "03":
+			if err := service.Restart(svc); err != nil {
+				fmt.Println("\n" + cRedBold + "[ผิดพลาด] " + cYelBold + err.Error() + cReset)
+			} else {
+				fmt.Println("\n" + cGrnBold + "รีสตาร์ท DROPBEAR สำเร็จ" + cReset)
+			}
+			waitEnter(r)
 		default:
 			fmt.Println("\n" + cRedBold + "กรุณาเลือกให้ถูกต้อง..." + cReset)
 			time.Sleep(2 * time.Second)
@@ -593,6 +609,7 @@ func openvpnMenu(r *bufio.Reader, svc service.Service) error {
 		fmt.Printf("%s[%s3%s] %s• %sOVPN ผ่านลิงก์ %s%s\n", cRedBold, cCyanBold, cRedBold, cWhtBold, cYelBold, webMark, cReset)
 		fmt.Printf("%s[%s4%s] %s• %sMULTILOGIN OVPN %s%s\n", cRedBold, cCyanBold, cRedBold, cWhtBold, cYelBold, multiMark, cReset)
 		fmt.Printf("%s[%s5%s] %s• %sเปลี่ยน HOST DNS%s\n", cRedBold, cCyanBold, cRedBold, cWhtBold, cYelBold, cReset)
+		fmt.Printf("%s[%s6%s] %s• %sรีสตาร์ท OPENVPN%s\n", cRedBold, cCyanBold, cRedBold, cWhtBold, cYelBold, cReset)
 		fmt.Printf("%s[%s0%s] %s• %sย้อนกลับ%s\n", cRedBold, cCyanBold, cRedBold, cWhtBold, cYelBold, cReset)
 		fmt.Println()
 
@@ -645,6 +662,13 @@ func openvpnMenu(r *bufio.Reader, svc service.Service) error {
 				fmt.Println("\n" + cRedBold + "[ผิดพลาด] " + cYelBold + err.Error() + cReset)
 				waitEnter(r)
 			}
+		case "6", "06":
+			if err := service.Restart(svc); err != nil {
+				fmt.Println("\n" + cRedBold + "[ผิดพลาด] " + cYelBold + err.Error() + cReset)
+			} else {
+				fmt.Println("\n" + cGrnBold + "รีสตาร์ท OPENVPN สำเร็จ" + cReset)
+			}
+			waitEnter(r)
 		default:
 			fmt.Println("\n" + cRedBold + "กรุณาเลือกให้ถูกต้อง..." + cReset)
 			time.Sleep(2 * time.Second)
