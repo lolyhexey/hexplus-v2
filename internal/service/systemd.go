@@ -44,6 +44,7 @@ Type=simple
 ExecStart={{.Binary}}{{range .Args}} {{.}}{{end}}
 Restart=on-failure
 RestartSec=5s
+StartLimitIntervalSec=0
 LimitNOFILE=131072
 # Bound the blast radius of a misbehaving service. None of ours need
 # anything outside the standard read-only system view.
