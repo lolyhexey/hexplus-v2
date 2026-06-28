@@ -335,6 +335,10 @@ func runCreateUser(r *bufio.Reader) error {
 		cYelBold, days, cWhtBold, cReset)
 	if ovpnPath != "" {
 		fmt.Printf("%sไฟล์ .ovpn: %s%s%s\n", cGrnBold, cCyanBold, ovpnPath, cReset)
+		if isFileServerOn() {
+			fmt.Printf("%sดาวน์โหลด: %shttp://%s:82/%s.ovpn%s\n",
+				cGrnBold, cCyanBold, host, name, cReset)
+		}
 	}
 	fmt.Println()
 	okLine("เพิ่มผู้ใช้สำเร็จ!")
