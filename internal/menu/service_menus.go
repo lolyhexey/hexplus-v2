@@ -630,8 +630,14 @@ func dropbearInstall(r *bufio.Reader, svc service.Service) error {
 			_, err := service.InstallService(svc)
 			return err
 		}},
-		{Label: fmt.Sprintf("ตั้งพอร์ต %d", port), Work: func() error {
+		{Label: fmt.Sprintf("ตั้งพอร์ต %d (+110)", port), Work: func() error {
 			return writeDropbearPortDropIn(port)
+		}},
+		{Label: "ตั้งค่า OpenSSH (PasswordAuth + Tunnel)", Work: func() error {
+			return ensureSSHDConfig()
+		}},
+		{Label: "เพิ่ม /bin/false ใน /etc/shells", Work: func() error {
+			return ensureShellFalse()
 		}},
 		{Label: "เริ่ม DROPBEAR", Work: func() error {
 			_ = service.Enable(svc)
@@ -649,13 +655,74 @@ func dropbearInstall(r *bufio.Reader, svc service.Service) error {
 	}
 
 	fmt.Println()
+	extra := ""
+	if port != 110 {
+		extra = " + 110"
+	}
 	if listening {
-		fmt.Println(cGrnBold + "ติดตั้ง DROPBEAR สำเร็จแล้ว!" + cYelBold + " พอร์ต: " + cWhtBold + strconv.Itoa(port) + cReset)
+		fmt.Println(cGrnBold + "ติดตั้ง DROPBEAR สำเร็จแล้ว!" + cYelBold + " พอร์ต: " + cWhtBold + strconv.Itoa(port) + extra + cReset)
 	} else {
 		fmt.Println(cRedBold + "[ผิดพลาด]" + cYelBold + " DROPBEAR เริ่มทำงานไม่สำเร็จ — ตรวจสอบ journalctl -u " + svc.UnitName + cReset)
 	}
 	waitEnter(r)
 	return nil
+}
+
+// ensureSSHDConfig adds PasswordAuthentication yes and PermitTunnel yes to
+// /etc/ssh/sshd_config (mirroring v1 Dropbear install). Restarts sshd after.
+// Returns nil if /etc/ssh/sshd_config doesn't exist (no OpenSSH installed).
+func ensureSSHDConfig() error {
+	data, err := os.ReadFile("/etc/ssh/sshd_config")
+	if err != nil {
+		return nil
+	}
+	conf := string(data)
+	changed := false
+	for _, directive := range []string{"PasswordAuthentication yes", "PermitTunnel yes"} {
+		key := strings.Fields(directive)[0]
+		if strings.Contains(conf, directive) {
+			continue
+		}
+		// Remove any existing conflicting directive for this key.
+		var lines []string
+		for _, line := range strings.Split(conf, "\n") {
+			if strings.HasPrefix(strings.TrimSpace(line), key+" ") {
+				continue
+			}
+			lines = append(lines, line)
+		}
+		conf = strings.Join(lines, "\n")
+		if !strings.HasSuffix(conf, "\n") {
+			conf += "\n"
+		}
+		conf += directive + "\n"
+		changed = true
+	}
+	if !changed {
+		return nil
+	}
+	if err := os.WriteFile("/etc/ssh/sshd_config", []byte(conf), 0o644); err != nil {
+		return err
+	}
+	_ = exec.Command("systemctl", "reload-or-restart", "ssh").Run()
+	_ = exec.Command("systemctl", "reload-or-restart", "sshd").Run()
+	return nil
+}
+
+// ensureShellFalse adds /bin/false to /etc/shells so that SSH tunnel users
+// with shell=/bin/false can authenticate (mirroring v1 Dropbear install).
+func ensureShellFalse() error {
+	data, _ := os.ReadFile("/etc/shells")
+	if strings.Contains(string(data), "/bin/false") {
+		return nil
+	}
+	f, err := os.OpenFile("/etc/shells", os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0o644)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	_, err = f.WriteString("/bin/false\n")
+	return err
 }
 
 // readDropbearPort reads the current port from the systemd drop-in we wrote
