@@ -371,32 +371,46 @@ func squidAddPort(r *bufio.Reader, svc service.Service) error {
 			return fmt.Errorf("พอร์ต %s ใช้งานอยู่แล้วใน squid.conf", portStr)
 		}
 	}
-
-	// Append a new "http_port NNN" line.
-	data, err := os.ReadFile("/etc/squid/squid.conf")
-	if err != nil {
-		return fmt.Errorf("อ่าน squid.conf ไม่ได้: %w", err)
-	}
-	newConf := string(data)
-	if !strings.HasSuffix(newConf, "\n") {
-		newConf += "\n"
-	}
-	newConf += "http_port " + portStr + "\n"
-	if err := os.WriteFile("/etc/squid/squid.conf", []byte(newConf), 0o644); err != nil {
-		return fmt.Errorf("เขียน squid.conf ไม่ได้: %w", err)
+	if err := checkPortFree(port, "tcp"); err != nil {
+		fmt.Println("\n" + cRedBold + "[ผิดพลาด] " + cYelBold + err.Error() + cReset)
+		waitEnter(r)
+		return nil
 	}
 
-	fmt.Println("\n" + cGrnBold + "กำลังเพิ่มพอร์ตให้ SQUID!" + cReset)
-	if err := service.Restart(svc); err != nil {
-		return fmt.Errorf("รีสตาร์ท SQUID ไม่สำเร็จ: %w", err)
+	fmt.Println()
+	var listening bool
+	if err := progress.Run([]progress.Step{
+		{Label: "เพิ่มพอร์ตใน squid.conf", Work: func() error {
+			data, err := os.ReadFile("/etc/squid/squid.conf")
+			if err != nil {
+				return fmt.Errorf("อ่าน squid.conf ไม่ได้: %w", err)
+			}
+			newConf := string(data)
+			if !strings.HasSuffix(newConf, "\n") {
+				newConf += "\n"
+			}
+			newConf += "http_port " + portStr + "\n"
+			return os.WriteFile("/etc/squid/squid.conf", []byte(newConf), 0o644)
+		}},
+		{Label: "รีสตาร์ท SQUID", Work: func() error {
+			if err := service.Restart(svc); err != nil {
+				return err
+			}
+			time.Sleep(2 * time.Second)
+			listening, _ = service.ListenStatus(port, "tcp")
+			return nil
+		}},
+	}); err != nil {
+		fmt.Println("\n" + cRedBold + "[ผิดพลาด] " + cYelBold + err.Error() + cReset)
+		waitEnter(r)
+		return nil
 	}
-	time.Sleep(700 * time.Millisecond)
-	listening, _ := service.ListenStatus(port, "tcp")
+
+	fmt.Println()
 	if listening {
-		fmt.Println("\n" + cGrnBold + "ติดตั้งเสร็จเรียบร้อยเเล้ว!" + cReset)
+		fmt.Println(cGrnBold + "เพิ่มพอร์ตสำเร็จแล้ว !" + cYelBold + " พอร์ต: " + cWhtBold + portStr + cReset)
 	} else {
-		fmt.Println("\n" + cRedBold + "[ผิดพลาด]" + cYelBold +
-			" พอร์ตใหม่ไม่ขึ้น — ตรวจสอบ journalctl -u " + svc.UnitName + cReset)
+		fmt.Println(cRedBold + "[ผิดพลาด]" + cYelBold + " พอร์ตใหม่ไม่ขึ้น — ตรวจสอบ journalctl -u " + svc.UnitName + cReset)
 	}
 	waitEnter(r)
 	return nil
