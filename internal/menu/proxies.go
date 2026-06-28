@@ -278,8 +278,9 @@ func proxyRemoveEntry(r *bufio.Reader, db *proxy.DB, cfg proxy.Config) {
 	unitName := cfg.UnitName()
 	err := progress.Run([]progress.Step{
 		{Label: fmt.Sprintf("ปิด + ลบ proxy พอร์ต %d", cfg.Port), Work: func() error {
-			// Ignore systemctl error — unit may already be missing (stale DB entry).
-			_ = systemctlRun("disable", "--now", unitName)
+			// kill immediately (no graceful wait), then disable autostart.
+			_ = exec.Command("systemctl", "kill", "-s", "SIGKILL", unitName).Run()
+			_ = systemctlRun("disable", unitName)
 			_, _, _, _ = proxy.RemoveUnit(cfg)
 			dbDelete(db, cfg.Name)
 			return db.Save()
