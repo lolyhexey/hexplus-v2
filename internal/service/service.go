@@ -100,10 +100,10 @@ func All() []Service {
 			// binary. systemd can't rewrite argv[0] otherwise.
 			Binary: paths.LibDir + "/dropbear",
 			// -F: foreground (no daemonize) so systemd Type=simple sees PID.
-			// -E: errors to stderr (-> journal).
 			// -R: generate host keys lazily if missing.
 			// -p: listen on this port (overridden via drop-in if user changes it).
-			Args:      []string{"-F", "-E", "-R", "-p", "22"},
+			// Note: no -E flag — built without syslog so stderr is already default.
+			Args:      []string{"-F", "-R", "-p", "22"},
 			Port:      22,
 			PortProto: "tcp",
 			After:     []string{"network-online.target"},
