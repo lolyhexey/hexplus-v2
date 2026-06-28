@@ -569,14 +569,32 @@ func dropbearInstall(r *bufio.Reader, svc service.Service) error {
 	paintTitleBar("              ติดตั้ง DROPBEAR               ")
 	fmt.Println()
 
+	portLine, _ := promptLineDefault(r, "พอร์ต DROPBEAR (ห้ามซ้ำกับ OpenSSH)", "22000")
+	port, err := strconv.Atoi(strings.TrimSpace(portLine))
+	if err != nil || port < 1 || port > 65535 {
+		fmt.Println(cRedBold + "[ผิดพลาด] พอร์ตไม่ถูกต้อง" + cReset)
+		waitEnter(r)
+		return nil
+	}
+	fmt.Println()
+
+	var listening bool
 	if err := progress.Run([]progress.Step{
 		{Label: "แตกไฟล์ binary + unit", Work: func() error {
 			_, err := service.InstallService(svc)
 			return err
 		}},
+		{Label: fmt.Sprintf("ตั้งพอร์ต %d", port), Work: func() error {
+			return writeDropbearPortDropIn(port)
+		}},
 		{Label: "เริ่ม DROPBEAR", Work: func() error {
 			_ = service.Enable(svc)
-			return service.Start(svc)
+			if err := service.Start(svc); err != nil {
+				return err
+			}
+			time.Sleep(700 * time.Millisecond)
+			listening, _ = service.ListenStatus(port, svc.PortProto)
+			return nil
 		}},
 	}); err != nil {
 		fmt.Println("\n" + cRedBold + "[ผิดพลาด] " + cYelBold + err.Error() + cReset)
@@ -584,7 +602,12 @@ func dropbearInstall(r *bufio.Reader, svc service.Service) error {
 		return nil
 	}
 
-	fmt.Println("\n" + cGrnBold + "ติดตั้ง DROPBEAR สำเร็จแล้ว!" + cReset)
+	fmt.Println()
+	if listening {
+		fmt.Println(cGrnBold + "ติดตั้ง DROPBEAR สำเร็จแล้ว!" + cYelBold + " พอร์ต: " + cWhtBold + strconv.Itoa(port) + cReset)
+	} else {
+		fmt.Println(cRedBold + "[ผิดพลาด]" + cYelBold + " DROPBEAR เริ่มทำงานไม่สำเร็จ — ตรวจสอบ journalctl -u " + svc.UnitName + cReset)
+	}
 	waitEnter(r)
 	return nil
 }
