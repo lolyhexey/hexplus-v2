@@ -19,6 +19,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"net/http"
 	"os"
 	"os/signal"
 	"runtime"
@@ -63,6 +64,8 @@ func main() {
 		runUser(rest)
 	case "proxy":
 		runProxy(rest)
+	case "fileserver":
+		runFileServer()
 	case "menu":
 		runMenu()
 	case "help", "-h", "--help":
@@ -223,6 +226,21 @@ func printStatusRow(st service.State) {
 		enabled, pid,
 		st.Service.Port, st.Service.PortProto, portStatus,
 	)
+}
+
+// runFileServer serves /root/openvpn/ over HTTP on port 82.
+// Runs under systemd as hexplus-fileserver.service.
+func runFileServer() {
+	dir := service.OVPNDir
+	_ = os.MkdirAll(dir, 0o700)
+	mux := http.NewServeMux()
+	mux.Handle("/", http.FileServer(http.Dir(dir)))
+	srv := &http.Server{Addr: ":82", Handler: mux}
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
+	defer stop()
+	go func() { _ = srv.ListenAndServe() }()
+	<-ctx.Done()
+	_ = srv.Shutdown(context.Background())
 }
 
 // runService dispatches the `hexplus service <verb> [name]` subcommand.

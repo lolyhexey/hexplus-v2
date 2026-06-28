@@ -46,6 +46,9 @@ type Service struct {
 	After []string
 }
 
+// OVPNDir is the directory served by the built-in file server.
+const OVPNDir = "/root/openvpn"
+
 // All returns the canonical service set in stable order. Iteration order
 // matches install / status / logs displays.
 func All() []Service {
@@ -72,6 +75,16 @@ func All() []Service {
 			Port:      3128,
 			PortProto: "tcp",
 			After:     []string{"network-online.target"},
+		},
+		{
+			Name:        "fileserver",
+			DisplayName: "HEXPLUS OVPN file server",
+			UnitName:    "hexplus-fileserver.service",
+			Binary:      "/usr/local/bin/hexplus",
+			Args:        []string{"fileserver"},
+			Port:        82,
+			PortProto:   "tcp",
+			After:       []string{"network-online.target"},
 		},
 		{
 			Name:        "dropbear",

@@ -315,6 +315,9 @@ func runCreateUser(r *bufio.Reader) error {
 				}); err2 == nil {
 					ovpnPath = "/root/" + name + ".ovpn"
 					_ = os.WriteFile(ovpnPath, ovpnBytes, 0o600)
+					// Mirror to /root/openvpn/ for the built-in file server.
+					_ = os.MkdirAll("/root/openvpn", 0o700)
+					_ = os.WriteFile("/root/openvpn/"+name+".ovpn", ovpnBytes, 0o600)
 				}
 			}
 		}

@@ -575,7 +575,7 @@ func openvpnMenu(r *bufio.Reader, svc service.Service) error {
 
 		port := readOpenVPNPort(svc)
 		webMark := markerOff()
-		if _, err := os.Stat("/var/www/html"); err == nil {
+		if isFileServerOn() {
 			webMark = markerOn()
 		}
 		multiMark := markerOff()
@@ -666,35 +666,36 @@ func ovpnConfContains(keyword string) bool {
 	return false
 }
 
-// toggleOVPNWeb installs or removes apache2 on port 82 for .ovpn file serving.
-// Mirrors v1 conexao option 3: ◉=/var/www/html exists, ○=absent.
+// isFileServerOn reports whether hexplus-fileserver.service is active.
+func isFileServerOn() bool {
+	svc, ok := service.ByName("fileserver")
+	if !ok {
+		return false
+	}
+	st, _ := service.Status(svc)
+	return st.ActiveState == "active"
+}
+
+// toggleOVPNWeb starts or stops the built-in hexplus file server (port 82).
+// No Apache2 needed — hexplus serves /root/openvpn/ via net/http.
 func toggleOVPNWeb(r *bufio.Reader) {
 	clearScreen()
-	if _, err := os.Stat("/var/www/html"); err == nil {
-		// Currently ON → turn off.
+	fsSvc, _ := service.ByName("fileserver")
+	if isFileServerOn() {
 		paintTitleBar("          OVPN ผ่านลิงก์ (ปิด)         ")
 		fmt.Println()
 		fmt.Print(cRedBold + "กำลังปิด" + cGrnBold + "." + cYelBold + "." + cRedBold + ". " + cYelBold)
-		exec.Command("apt-get", "remove", "-y", "apache2").Run()
-		exec.Command("apt-get", "autoremove", "-y").Run()
-		os.RemoveAll("/var/www/html")
+		_ = systemctlRun("disable", "--now", fsSvc.UnitName)
 		fmt.Println("Ok" + cReset)
 	} else {
-		// Currently OFF → turn on.
 		paintTitleBar("          OVPN ผ่านลิงก์ (เปิด)        ")
 		fmt.Println()
 		fmt.Print(cGrnBold + "กำลังเปิด" + cGrnBold + "." + cYelBold + "." + cRedBold + ". " + cYelBold)
-		exec.Command("apt-get", "install", "-y", "apache2", "zip").Run()
-		// Move apache2 to port 82 so it doesn't conflict with other services.
-		if data, err := os.ReadFile("/etc/apache2/ports.conf"); err == nil {
-			newConf := strings.ReplaceAll(string(data), "Listen 80", "Listen 82")
-			_ = os.WriteFile("/etc/apache2/ports.conf", []byte(newConf), 0o644)
+		_ = os.MkdirAll("/root/openvpn", 0o700)
+		// Write unit file and enable+start.
+		if _, err := service.WriteUnits(); err == nil {
+			_ = systemctlRun("enable", "--now", fsSvc.UnitName)
 		}
-		exec.Command("service", "apache2", "restart").Run()
-		os.MkdirAll("/var/www/html", 0o755)
-		os.WriteFile("/var/www/html/index.html", []byte(""), 0o644)
-		exec.Command("chmod", "-R", "755", "/var/www").Run()
-		exec.Command("service", "apache2", "restart").Run()
 		fmt.Println("Ok" + cReset)
 	}
 	waitEnter(r)
