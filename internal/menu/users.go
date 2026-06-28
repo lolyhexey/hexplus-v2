@@ -329,7 +329,7 @@ func runCreateUser(r *bufio.Reader) error {
 	fmt.Printf("%sIP: %s%s\n", cGrnBold, cWhtBold, host)
 	fmt.Printf("%sUser: %s%s\n", cGrnBold, cWhtBold, name)
 	fmt.Printf("%sPassword: %s%s\n", cGrnBold, cWhtBold, pw)
-	fmt.Printf("%sjำนวนอุปกรณ์ที่ใช้พร้อมกัน: %s%d\n", cGrnBold, cWhtBold, limit)
+	fmt.Printf("%sจำนวนอุปกรณ์ที่ใช้พร้อมกัน: %s%d\n", cGrnBold, cWhtBold, limit)
 	fmt.Printf("%sวันหมดอายุ: %s%s (%s%d %sวัน%s)\n",
 		cGrnBold, cWhtBold, expiresAt.Format("02/01/2006"),
 		cYelBold, days, cWhtBold, cReset)
