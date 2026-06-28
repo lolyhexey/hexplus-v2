@@ -12,6 +12,7 @@ import (
 	"bufio"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -81,6 +82,27 @@ func defaultServerIP() string {
 		return ""
 	}
 	return strings.TrimSpace(string(b))
+}
+
+// checkPortFree tries to bind the port/proto for a moment to confirm nothing
+// else is using it. Returns a Thai-language error if the port is taken.
+func checkPortFree(port int, proto string) error {
+	addr := fmt.Sprintf(":%d", port)
+	switch proto {
+	case "udp", "udp6":
+		pc, err := net.ListenPacket("udp", addr)
+		if err != nil {
+			return fmt.Errorf("พอร์ต %d/udp ถูกใช้งานอยู่แล้ว — เลือกพอร์ตอื่น", port)
+		}
+		pc.Close()
+	default:
+		ln, err := net.Listen("tcp", addr)
+		if err != nil {
+			return fmt.Errorf("พอร์ต %d/tcp ถูกใช้งานอยู่แล้ว — เลือกพอร์ตอื่น", port)
+		}
+		ln.Close()
+	}
+	return nil
 }
 
 // showUnitLog runs journalctl for the given unit name(s) and streams the
@@ -240,6 +262,11 @@ func squidInstall(r *bufio.Reader, svc service.Service) error {
 	port, convErr := strconv.Atoi(strings.TrimSpace(portLine))
 	if convErr != nil || port < 1 || port > 65535 {
 		fmt.Println(cRedBold + "[ผิดพลาด] พอร์ตไม่ถูกต้อง" + cReset)
+		waitEnter(r)
+		return nil
+	}
+	if err := checkPortFree(port, "tcp"); err != nil {
+		fmt.Println("\n" + cRedBold + "[ผิดพลาด] " + cYelBold + err.Error() + cReset)
 		waitEnter(r)
 		return nil
 	}
@@ -573,6 +600,11 @@ func dropbearInstall(r *bufio.Reader, svc service.Service) error {
 	port, err := strconv.Atoi(strings.TrimSpace(portLine))
 	if err != nil || port < 1 || port > 65535 {
 		fmt.Println(cRedBold + "[ผิดพลาด] พอร์ตไม่ถูกต้อง" + cReset)
+		waitEnter(r)
+		return nil
+	}
+	if err := checkPortFree(port, "tcp"); err != nil {
+		fmt.Println("\n" + cRedBold + "[ผิดพลาด] " + cYelBold + err.Error() + cReset)
 		waitEnter(r)
 		return nil
 	}
@@ -1023,6 +1055,12 @@ func openvpnInstall(r *bufio.Reader, svc service.Service) error {
 	proto := "tcp"
 	if strings.TrimSpace(protoChoice) == "1" {
 		proto = "udp"
+	}
+
+	if err := checkPortFree(port, proto); err != nil {
+		fmt.Println("\n" + cRedBold + "[ผิดพลาด] " + cYelBold + err.Error() + cReset)
+		waitEnter(r)
+		return nil
 	}
 
 	// ---- ถาม PKI (interaction ก่อน progress) ----

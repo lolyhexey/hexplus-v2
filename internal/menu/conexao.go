@@ -15,6 +15,7 @@ import (
 	"bufio"
 	"bytes"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -314,6 +315,13 @@ func sshAddPort(r *bufio.Reader, current []int) error {
 			waitEnter(r)
 			return nil
 		}
+	}
+	if ln, err := net.Listen("tcp", fmt.Sprintf(":%d", newPort)); err != nil {
+		fmt.Printf("%s[ผิดพลาด] พอร์ต %d ถูกใช้งานอยู่แล้ว — เลือกพอร์ตอื่น%s\n", cRedBold, newPort, cReset)
+		waitEnter(r)
+		return nil
+	} else {
+		ln.Close()
 	}
 	data, rdErr := os.ReadFile("/etc/ssh/sshd_config")
 	if rdErr != nil {

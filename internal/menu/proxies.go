@@ -359,6 +359,9 @@ func proxyInstall(r *bufio.Reader, db *proxy.DB, s *proxySlot) error {
 			return fmt.Errorf("พอร์ต %d ถูกใช้งานโดย proxy %q อยู่แล้ว", port, other.Name)
 		}
 	}
+	if err := checkPortFree(port, "tcp"); err != nil {
+		return err
+	}
 
 	defHost := s.defHost
 	if s.key == "openvpn" {
