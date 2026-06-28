@@ -258,6 +258,7 @@ func opensshMenu(r *bufio.Reader) error {
 			{"1", "เพิ่มพอร์ต SSH"},
 			{"2", "ลบพอร์ต SSH"},
 			{"3", "รีสตาร์ท SSH"},
+			{"4", "ดู log SSH"},
 			{"0", "ย้อนกลับ"},
 		})
 		fmt.Println()
@@ -282,6 +283,8 @@ func opensshMenu(r *bufio.Reader) error {
 			restartSSH()
 			fmt.Println("\n" + cGrnBold + "รีสตาร์ท SSH สำเร็จ" + cReset)
 			waitEnter(r)
+		case "4", "04":
+			showUnitLog(r, "ssh", "sshd")
 		case "0", "00":
 			return nil
 		}

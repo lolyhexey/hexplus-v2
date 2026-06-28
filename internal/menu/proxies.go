@@ -285,8 +285,11 @@ func proxyToggle(r *bufio.Reader, db *proxy.DB, s *proxySlot) {
 			cRedBold, cCyanBold, i+1, cRedBold, marker, cWhtBold, e.Port, cReset)
 	}
 	addIdx := len(entries) + 1
+	logIdx := len(entries) + 2
 	fmt.Printf("%s[%s%d%s] %s• %sเพิ่มพอร์ต %s ใหม่%s\n",
 		cRedBold, cCyanBold, addIdx, cRedBold, cWhtBold, cYelBold, s.label, cReset)
+	fmt.Printf("%s[%s%d%s] %s• %sดู log %s%s\n",
+		cRedBold, cCyanBold, logIdx, cRedBold, cWhtBold, cYelBold, s.label, cReset)
 	fmt.Printf("%s[%s0%s] %s• %sย้อนกลับ%s\n",
 		cRedBold, cCyanBold, cRedBold, cWhtBold, cYelBold, cReset)
 	fmt.Println()
@@ -305,6 +308,12 @@ func proxyToggle(r *bufio.Reader, db *proxy.DB, s *proxySlot) {
 			fmt.Println("\n" + cRedBold + "[ผิดพลาด] " + cYelBold + err.Error() + cReset)
 			waitEnter(r)
 		}
+	case n == logIdx:
+		var unitNames []string
+		for _, e := range entries {
+			unitNames = append(unitNames, e.UnitName())
+		}
+		showUnitLog(r, unitNames...)
 	case n >= 1 && n <= len(entries):
 		proxyRemoveEntry(r, db, entries[n-1])
 	}

@@ -83,6 +83,28 @@ func defaultServerIP() string {
 	return strings.TrimSpace(string(b))
 }
 
+// showUnitLog runs journalctl for the given unit name(s) and streams the
+// output directly to the terminal. Uses -o short-precise so every line
+// shows a microsecond timestamp plus priority level — enough to diagnose
+// most crash/config/permission errors without leaving the menu.
+func showUnitLog(r *bufio.Reader, unitNames ...string) {
+	clearScreen()
+	paintTitleBar("   ดู LOG: " + strings.Join(unitNames, " + ") + "   ")
+	fmt.Println()
+	args := []string{"-n", "50", "--no-pager", "-o", "short-precise"}
+	for _, u := range unitNames {
+		args = append(args, "-u", u)
+	}
+	cmd := exec.Command("journalctl", args...)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		fmt.Printf("\n%s[ผิดพลาด] อ่าน log ไม่ได้: %v%s\n", cRedBold, err, cReset)
+	}
+	fmt.Println()
+	waitEnter(r)
+}
+
 // =====================================================================
 // SQUID (fun_squid in Modulos/conexao)
 // =====================================================================
@@ -110,6 +132,7 @@ func squidMenu(r *bufio.Reader, svc service.Service) error {
 			{"2", "เพิ่มพอร์ตพร็อกซี่"},
 			{"3", "ลบพอร์ตพร็อกซี่"},
 			{"4", "รีสตาร์ท SQUID"},
+			{"5", "ดู log SQUID"},
 			{"0", "ย้อนกลับ"},
 		})
 		fmt.Println()
@@ -160,6 +183,8 @@ func squidMenu(r *bufio.Reader, svc service.Service) error {
 				fmt.Println("\n" + cGrnBold + "รีสตาร์ท SQUID สำเร็จ" + cReset)
 			}
 			waitEnter(r)
+		case "5", "05":
+			showUnitLog(r, svc.UnitName)
 		default:
 			fmt.Println("\n" + cRedBold + "กรุณาเลือกให้ถูกต้อง..." + cReset)
 			time.Sleep(2 * time.Second)
@@ -483,6 +508,7 @@ func dropbearMenu(r *bufio.Reader, svc service.Service) error {
 			{"1", "เปลี่ยนพอร์ต DROPBEAR"},
 			{"2", "ลบ DROPBEAR"},
 			{"3", "รีสตาร์ท DROPBEAR"},
+			{"4", "ดู log DROPBEAR"},
 			{"0", "ย้อนกลับ"},
 		})
 		fmt.Println()
@@ -529,6 +555,8 @@ func dropbearMenu(r *bufio.Reader, svc service.Service) error {
 				fmt.Println("\n" + cGrnBold + "รีสตาร์ท DROPBEAR สำเร็จ" + cReset)
 			}
 			waitEnter(r)
+		case "4", "04":
+			showUnitLog(r, svc.UnitName)
 		default:
 			fmt.Println("\n" + cRedBold + "กรุณาเลือกให้ถูกต้อง..." + cReset)
 			time.Sleep(2 * time.Second)
@@ -610,6 +638,7 @@ func openvpnMenu(r *bufio.Reader, svc service.Service) error {
 		fmt.Printf("%s[%s4%s] %s• %sMULTILOGIN OVPN %s%s\n", cRedBold, cCyanBold, cRedBold, cWhtBold, cYelBold, multiMark, cReset)
 		fmt.Printf("%s[%s5%s] %s• %sเปลี่ยน HOST DNS%s\n", cRedBold, cCyanBold, cRedBold, cWhtBold, cYelBold, cReset)
 		fmt.Printf("%s[%s6%s] %s• %sรีสตาร์ท OPENVPN%s\n", cRedBold, cCyanBold, cRedBold, cWhtBold, cYelBold, cReset)
+		fmt.Printf("%s[%s7%s] %s• %sดู log OPENVPN%s\n", cRedBold, cCyanBold, cRedBold, cWhtBold, cYelBold, cReset)
 		fmt.Printf("%s[%s0%s] %s• %sย้อนกลับ%s\n", cRedBold, cCyanBold, cRedBold, cWhtBold, cYelBold, cReset)
 		fmt.Println()
 
@@ -669,6 +698,8 @@ func openvpnMenu(r *bufio.Reader, svc service.Service) error {
 				fmt.Println("\n" + cGrnBold + "รีสตาร์ท OPENVPN สำเร็จ" + cReset)
 			}
 			waitEnter(r)
+		case "7", "07":
+			showUnitLog(r, svc.UnitName)
 		default:
 			fmt.Println("\n" + cRedBold + "กรุณาเลือกให้ถูกต้อง..." + cReset)
 			time.Sleep(2 * time.Second)
