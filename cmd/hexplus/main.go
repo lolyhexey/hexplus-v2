@@ -19,12 +19,14 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"os/signal"
 	"runtime"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/lolyhexey/hexplus/internal/assets"
 	"github.com/lolyhexey/hexplus/internal/extract"
@@ -238,9 +240,15 @@ func runFileServer() {
 	srv := &http.Server{Addr: ":82", Handler: mux}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
-	go func() { _ = srv.ListenAndServe() }()
+	go func() {
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Printf("fileserver: %v", err)
+		}
+	}()
 	<-ctx.Done()
-	_ = srv.Shutdown(context.Background())
+	shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_ = srv.Shutdown(shutCtx)
 }
 
 // runService dispatches the `hexplus service <verb> [name]` subcommand.

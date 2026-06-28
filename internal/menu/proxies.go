@@ -509,8 +509,7 @@ func proxyOpenPort(r *bufio.Reader, db *proxy.DB) {
 	opened := false
 	if path, err := exec.LookPath("ufw"); err == nil {
 		cmd := exec.Command(path, "allow", strconv.Itoa(port)+"/tcp")
-		if out, err := cmd.CombinedOutput(); err == nil {
-			_ = out
+		if _, err := cmd.CombinedOutput(); err == nil {
 			opened = true
 		}
 	}

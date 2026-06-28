@@ -1279,6 +1279,8 @@ func cleanupOpenVPN() {
 func ovpnPort() int { return readOpenVPNPort(service.Service{Port: 1194}) }
 
 // ovpnProto reads proto from /etc/openvpn/server.conf, fallback "tcp".
+// Strips the "6" IPv6 suffix (tcp6→tcp, udp6→udp) since most clients
+// only accept the plain form.
 func ovpnProto() string {
 	if data, err := os.ReadFile("/etc/openvpn/server.conf"); err == nil {
 		for _, line := range strings.Split(string(data), "\n") {
@@ -1286,7 +1288,7 @@ func ovpnProto() string {
 			if strings.HasPrefix(trim, "proto ") {
 				fields := strings.Fields(trim)
 				if len(fields) >= 2 {
-					return fields[1]
+					return strings.TrimSuffix(fields[1], "6")
 				}
 			}
 		}
