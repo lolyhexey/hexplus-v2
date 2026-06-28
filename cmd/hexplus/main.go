@@ -35,6 +35,7 @@ import (
 	"github.com/lolyhexey/hexplus/internal/pki"
 	"github.com/lolyhexey/hexplus/internal/proxy"
 	"github.com/lolyhexey/hexplus/internal/service"
+	"github.com/lolyhexey/hexplus/internal/sslhmux"
 	"github.com/lolyhexey/hexplus/internal/ssltunnel"
 	"github.com/lolyhexey/hexplus/internal/user"
 	"github.com/lolyhexey/hexplus/internal/version"
@@ -73,6 +74,8 @@ func main() {
 		runMenu()
 	case "ssltunnel":
 		runSSLTunnel(rest)
+	case "sslhmux":
+		runSSLHMux(rest)
 	case "help", "-h", "--help":
 		printUsage(os.Stdout)
 	default:
@@ -850,6 +853,21 @@ func runSSLTunnel(args []string) {
 	defer cancel()
 	if err := ssltunnel.Run(ctx); err != nil {
 		fmt.Fprintln(os.Stderr, "ssltunnel:", err)
+		os.Exit(1)
+	}
+}
+
+// runSSLHMux is the foreground multiplexer invoked by the systemd unit.
+// Usage: hexplus sslhmux run
+func runSSLHMux(args []string) {
+	if len(args) == 0 || args[0] != "run" {
+		fmt.Fprintln(os.Stderr, "usage: hexplus sslhmux run")
+		os.Exit(2)
+	}
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer cancel()
+	if err := sslhmux.Run(ctx); err != nil {
+		fmt.Fprintln(os.Stderr, "sslhmux:", err)
 		os.Exit(1)
 	}
 }

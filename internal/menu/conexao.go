@@ -27,6 +27,7 @@ import (
 
 	"github.com/lolyhexey/hexplus/internal/proxy"
 	"github.com/lolyhexey/hexplus/internal/service"
+	"github.com/lolyhexey/hexplus/internal/sslhmux"
 	"github.com/lolyhexey/hexplus/internal/ssltunnel"
 )
 
@@ -74,7 +75,12 @@ func runConexao(r *bufio.Reader) error {
 				fmt.Println(cRedBold + "[ผิดพลาด] " + cYelBold + err.Error() + cReset)
 				waitEnter(r)
 			}
-		case "7", "07", "8", "08":
+		case "7", "07":
+			if err := sslhMuxMenu(r); err != nil {
+				fmt.Println(cRedBold + "[ผิดพลาด] " + cYelBold + err.Error() + cReset)
+				waitEnter(r)
+			}
+		case "8", "08":
 			fmt.Println("\n" + cYelBold + "ฟีเจอร์นี้ยังไม่รองรับในเวอร์ชันนี้" + cReset)
 			waitEnter(r)
 		case "9", "09":
@@ -162,7 +168,7 @@ func paintConexaoMenu() {
 		{"04", "OPENVPN", "openvpn"},
 		{"05", "PROXY SOCKS", "proxy"},
 		{"06", "SSL TUNNEL", "ssltunnel"},
-		{"07", "SSLH MULTIPLEX", ""},
+		{"07", "SSLH MULTIPLEX", "sslhmux"},
 		{"08", "CHISEL", ""},
 	}
 	fmt.Println()
@@ -171,6 +177,12 @@ func paintConexaoMenu() {
 		switch it.key {
 		case "":
 			marker = markerOff()
+		case "sslhmux":
+			if exec.Command("systemctl", "is-active", "--quiet", sslhmux.UnitName).Run() == nil {
+				marker = markerOn()
+			} else {
+				marker = markerOff()
+			}
 		case "ssltunnel":
 			if exec.Command("systemctl", "is-active", "--quiet", ssltunnel.UnitName).Run() == nil {
 				marker = markerOn()
