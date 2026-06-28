@@ -37,7 +37,6 @@ Type=simple
 ExecStart={{.SelfPath}} proxy run {{.Name}}
 Restart=on-failure
 RestartSec=5s
-StartLimitIntervalSec=0
 LimitNOFILE=65536
 ProtectSystem=full
 ProtectHome=true
