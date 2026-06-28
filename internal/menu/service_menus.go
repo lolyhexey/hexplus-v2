@@ -1254,6 +1254,22 @@ func cleanupOpenVPN() {
 // ovpnPort reads the port from /etc/openvpn/server.conf, fallback 1194.
 func ovpnPort() int { return readOpenVPNPort(service.Service{Port: 1194}) }
 
+// ovpnProto reads proto from /etc/openvpn/server.conf, fallback "tcp".
+func ovpnProto() string {
+	if data, err := os.ReadFile("/etc/openvpn/server.conf"); err == nil {
+		for _, line := range strings.Split(string(data), "\n") {
+			trim := strings.TrimSpace(line)
+			if strings.HasPrefix(trim, "proto ") {
+				fields := strings.Fields(trim)
+				if len(fields) >= 2 {
+					return fields[1]
+				}
+			}
+		}
+	}
+	return "tcp"
+}
+
 func readOpenVPNPort(svc service.Service) int {
 	if data, err := os.ReadFile("/etc/openvpn/server.conf"); err == nil {
 		for _, line := range strings.Split(string(data), "\n") {

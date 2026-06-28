@@ -311,7 +311,7 @@ func runCreateUser(r *bufio.Reader) error {
 				_ = os.WriteFile(pki.ClientsDir+"/"+name+".crt", clientCert.CertPEM, 0o644)
 				_ = os.WriteFile(pki.ClientsDir+"/"+name+".key", clientCert.KeyPEM, 0o600)
 				if ovpnBytes, err2 := user.Export(name, user.OVPNInput{
-					RemoteHost: host, RemotePort: ovpnPort(), Proto: "udp",
+					RemoteHost: host, RemotePort: ovpnPort(), Proto: ovpnProto(),
 				}); err2 == nil {
 					ovpnPath = "/root/" + name + ".ovpn"
 					_ = os.WriteFile(ovpnPath, ovpnBytes, 0o600)
