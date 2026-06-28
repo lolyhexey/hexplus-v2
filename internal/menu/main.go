@@ -13,7 +13,35 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"unicode"
 )
+
+// thaiVisualWidth returns the number of terminal columns a string occupies.
+// Thai combining characters (tone marks, vowel diacritics) are zero-width;
+// everything else is 1 column per rune.
+func thaiVisualWidth(s string) int {
+	w := 0
+	for _, r := range s {
+		if unicode.Is(unicode.Mn, r) {
+			continue // combining / non-spacing mark → zero width
+		}
+		// Thai above-base vowels and tone marks (U+0E31, U+0E34–U+0E37, U+0E47–U+0E4E)
+		if (r == 0x0E31) || (r >= 0x0E34 && r <= 0x0E37) || (r >= 0x0E47 && r <= 0x0E4E) {
+			continue
+		}
+		w++
+	}
+	return w
+}
+
+// padRight pads s with spaces on the right until its visual width equals width.
+func padRight(s string, width int) string {
+	pad := width - thaiVisualWidth(s)
+	if pad <= 0 {
+		return s
+	}
+	return s + strings.Repeat(" ", pad)
+}
 
 // Run is the entry point cmd/hexplus calls when the operator types
 // `hexplus menu` or just `hexplus` on an installed box.
@@ -118,9 +146,9 @@ func paintMainMenu() error {
 				cWhtBold, cYelBold, row.leftLabel, cReset)
 			continue
 		}
-		fmt.Printf("%s[%s%s%s] %s• %s%-32s %s[%s%s%s] %s• %s%s%s\n",
+		fmt.Printf("%s[%s%s%s] %s• %s%s %s[%s%s%s] %s• %s%s%s\n",
 			cRedBold, cCyanBold, row.leftIdx, cRedBold,
-			cWhtBold, cYelBold, row.leftLabel,
+			cWhtBold, cYelBold, padRight(row.leftLabel, 32),
 			cRedBold, cCyanBold, row.rightIdx, cRedBold,
 			cWhtBold, cYelBold, row.rightLabel, cReset)
 	}
