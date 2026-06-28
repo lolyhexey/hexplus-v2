@@ -16,6 +16,9 @@
 !/internal/assets/bin/README.placeholder
 !/internal/assets/bin/mime.conf
 !/internal/assets/bin/squid-errors.tar.gz
+!/internal/assets/bin/squid
+!/internal/assets/bin/openvpn
+!/internal/assets/bin/dropbearmulti
 
 # Local dev
 .idea/
