@@ -35,6 +35,7 @@ import (
 	"github.com/lolyhexey/hexplus/internal/pki"
 	"github.com/lolyhexey/hexplus/internal/proxy"
 	"github.com/lolyhexey/hexplus/internal/service"
+	"github.com/lolyhexey/hexplus/internal/ssltunnel"
 	"github.com/lolyhexey/hexplus/internal/user"
 	"github.com/lolyhexey/hexplus/internal/version"
 )
@@ -70,6 +71,8 @@ func main() {
 		runFileServer()
 	case "menu":
 		runMenu()
+	case "ssltunnel":
+		runSSLTunnel(rest)
 	case "help", "-h", "--help":
 		printUsage(os.Stdout)
 	default:
@@ -832,6 +835,21 @@ func runProxyRun(args []string) {
 	defer cancel()
 	if err := h.Serve(ctx); err != nil {
 		fmt.Fprintln(os.Stderr, "proxy run:", err)
+		os.Exit(1)
+	}
+}
+
+// runSSLTunnel is the foreground server invoked by the systemd unit.
+// Usage: hexplus ssltunnel run
+func runSSLTunnel(args []string) {
+	if len(args) == 0 || args[0] != "run" {
+		fmt.Fprintln(os.Stderr, "usage: hexplus ssltunnel run")
+		os.Exit(2)
+	}
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer cancel()
+	if err := ssltunnel.Run(ctx); err != nil {
+		fmt.Fprintln(os.Stderr, "ssltunnel:", err)
 		os.Exit(1)
 	}
 }
