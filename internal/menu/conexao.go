@@ -966,6 +966,7 @@ func writeDropbearPortDropIn(port int) error {
 Environment=DROPBEAR_PORT=%d
 ExecStart=
 ExecStart=/usr/local/lib/hexplus/dropbear -F -R -p %d%s
+ReadWritePaths=/etc/dropbear
 `, port, port, extra)
 	dest := filepath.Join(dir, "port.conf")
 	prev, _ := os.ReadFile(dest)

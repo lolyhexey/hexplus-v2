@@ -631,6 +631,10 @@ func dropbearInstall(r *bufio.Reader, svc service.Service) error {
 			return err
 		}},
 		{Label: fmt.Sprintf("ตั้งพอร์ต %d (+110)", port), Work: func() error {
+			// Pre-create /etc/dropbear so ProtectSystem=full doesn't block key generation.
+			if err := os.MkdirAll("/etc/dropbear", 0o700); err != nil {
+				return err
+			}
 			return writeDropbearPortDropIn(port)
 		}},
 		{Label: "ตั้งค่า OpenSSH (PasswordAuth + Tunnel)", Work: func() error {
