@@ -198,9 +198,9 @@ func paintPage2() {
 				cWhtBold, cYelBold, row.leftLabel, cReset)
 			continue
 		}
-		fmt.Printf("%s[%s%s%s] %s• %s%-32s %s[%s%s%s] %s• %s%s%s\n",
+		fmt.Printf("%s[%s%s%s] %s• %s%s %s[%s%s%s] %s• %s%s%s\n",
 			cRedBold, cCyanBold, row.leftIdx, cRedBold,
-			cWhtBold, cYelBold, row.leftLabel,
+			cWhtBold, cYelBold, padRight(row.leftLabel, 23),
 			cRedBold, cCyanBold, row.rightIdx, cRedBold,
 			cWhtBold, cYelBold, row.rightLabel, cReset)
 	}
