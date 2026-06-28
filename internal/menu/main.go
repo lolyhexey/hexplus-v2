@@ -148,7 +148,7 @@ func paintMainMenu() error {
 		}
 		fmt.Printf("%s[%s%s%s] %s• %s%s %s[%s%s%s] %s• %s%s%s\n",
 			cRedBold, cCyanBold, row.leftIdx, cRedBold,
-			cWhtBold, cYelBold, padRight(row.leftLabel, 32),
+			cWhtBold, cYelBold, padRight(row.leftLabel, 23),
 			cRedBold, cCyanBold, row.rightIdx, cRedBold,
 			cWhtBold, cYelBold, row.rightLabel, cReset)
 	}
