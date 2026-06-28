@@ -44,6 +44,10 @@ type Service struct {
 
 	// After lists systemd unit dependencies for the [Unit] After= line.
 	After []string
+
+	// AllowHome disables ProtectHome=true in the unit — needed for services
+	// that must read from /root/.
+	AllowHome bool
 }
 
 // OVPNDir is the directory served by the built-in file server.
@@ -85,6 +89,7 @@ func All() []Service {
 			Port:        82,
 			PortProto:   "tcp",
 			After:       []string{"network-online.target"},
+			AllowHome:   true,
 		},
 		{
 			Name:        "dropbear",

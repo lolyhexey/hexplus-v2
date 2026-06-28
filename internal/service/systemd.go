@@ -48,7 +48,7 @@ LimitNOFILE=131072
 # Bound the blast radius of a misbehaving service. None of ours need
 # anything outside the standard read-only system view.
 ProtectSystem=full
-ProtectHome=true
+ProtectHome={{if .AllowHome}}false{{else}}true{{end}}
 NoNewPrivileges=true
 
 [Install]
