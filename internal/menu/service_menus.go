@@ -681,22 +681,35 @@ func isFileServerOn() bool {
 func toggleOVPNWeb(r *bufio.Reader) {
 	clearScreen()
 	fsSvc, _ := service.ByName("fileserver")
+	var err error
 	if isFileServerOn() {
 		paintTitleBar("          OVPN ผ่านลิงก์ (ปิด)         ")
 		fmt.Println()
-		fmt.Print(cRedBold + "กำลังปิด" + cGrnBold + "." + cYelBold + "." + cRedBold + ". " + cYelBold)
-		_ = systemctlRun("disable", "--now", fsSvc.UnitName)
-		fmt.Println("Ok" + cReset)
+		err = progress.Run([]progress.Step{
+			{Label: "ปิด file server", Work: func() error {
+				return systemctlRun("disable", "--now", fsSvc.UnitName)
+			}},
+		})
 	} else {
 		paintTitleBar("          OVPN ผ่านลิงก์ (เปิด)        ")
 		fmt.Println()
-		fmt.Print(cGrnBold + "กำลังเปิด" + cGrnBold + "." + cYelBold + "." + cRedBold + ". " + cYelBold)
-		_ = os.MkdirAll("/root/openvpn", 0o700)
-		// Write unit file and enable+start.
-		if _, err := service.WriteUnits(); err == nil {
-			_ = systemctlRun("enable", "--now", fsSvc.UnitName)
-		}
-		fmt.Println("Ok" + cReset)
+		err = progress.Run([]progress.Step{
+			{Label: "สร้างโฟลเดอร์ /root/openvpn", Work: func() error {
+				return os.MkdirAll("/root/openvpn", 0o700)
+			}},
+			{Label: "ติดตั้ง service unit", Work: func() error {
+				_, werr := service.WriteUnits()
+				return werr
+			}},
+			{Label: "เปิด file server พอร์ต 82", Work: func() error {
+				return systemctlRun("enable", "--now", fsSvc.UnitName)
+			}},
+		})
+	}
+	if err != nil {
+		fmt.Printf("\n"+cRedBold+"[ผิดพลาด] "+cYelBold+"%v"+cReset+"\n", err)
+	} else {
+		fmt.Printf("\n" + cGrnBold + "สำเร็จ!" + cReset + "\n")
 	}
 	waitEnter(r)
 }
