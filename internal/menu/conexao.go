@@ -80,9 +80,6 @@ func runConexao(r *bufio.Reader) error {
 				fmt.Println(cRedBold + "[ผิดพลาด] " + cYelBold + err.Error() + cReset)
 				waitEnter(r)
 			}
-		case "8", "08":
-			fmt.Println("\n" + cYelBold + "ฟีเจอร์นี้ยังไม่รองรับในเวอร์ชันนี้" + cReset)
-			waitEnter(r)
 		case "9", "09":
 			return nil
 		default:
@@ -169,7 +166,6 @@ func paintConexaoMenu() {
 		{"05", "PROXY SOCKS", "proxy"},
 		{"06", "SSL TUNNEL", "ssltunnel"},
 		{"07", "SSLH MULTIPLEX", "sslhmux"},
-		{"08", "CHISEL", ""},
 	}
 	fmt.Println()
 	for _, it := range items {
