@@ -44,11 +44,6 @@ type Record struct {
 	// HEXPLUS v1 stored this for a verifatt cron to act on - v2 will
 	// surface it the same way once we port that flow.
 	Limit int `json:"limit,omitempty"`
-	// CA names the extra CA that signed this user's client cert. Empty
-	// means the user was signed by the primary CA (default flow). Used by
-	// Remove/Export to find the on-disk cert under the right per-CA
-	// clients folder.
-	CA string `json:"ca,omitempty"`
 }
 
 // DB is the on-disk metadata. JSON for forward-compat: easy to add

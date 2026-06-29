@@ -785,7 +785,6 @@ func openvpnMenu(r *bufio.Reader, svc service.Service) error {
 		fmt.Printf("%s[%s5%s] %s• %sเปลี่ยน HOST DNS%s\n", cRedBold, cCyanBold, cRedBold, cWhtBold, cYelBold, cReset)
 		fmt.Printf("%s[%s6%s] %s• %sรีสตาร์ท OPENVPN%s\n", cRedBold, cCyanBold, cRedBold, cWhtBold, cYelBold, cReset)
 		fmt.Printf("%s[%s7%s] %s• %sดู log OPENVPN%s\n", cRedBold, cCyanBold, cRedBold, cWhtBold, cYelBold, cReset)
-		fmt.Printf("%s[%s8%s] %s• %sระบบ Multi Cert%s\n", cRedBold, cCyanBold, cRedBold, cWhtBold, cYelBold, cReset)
 		fmt.Printf("%s[%s0%s] %s• %sย้อนกลับ%s\n", cRedBold, cCyanBold, cRedBold, cWhtBold, cYelBold, cReset)
 		fmt.Println()
 
@@ -850,11 +849,6 @@ func openvpnMenu(r *bufio.Reader, svc service.Service) error {
 			waitEnter(r)
 		case "7", "07":
 			showUnitLog(r, svc.UnitName)
-		case "8", "08":
-			if err := multiCertMenu(r, svc); err != nil {
-				fmt.Println("\n" + cRedBold + "[ผิดพลาด] " + cYelBold + err.Error() + cReset)
-				waitEnter(r)
-			}
 		default:
 			fmt.Println("\n" + cRedBold + "กรุณาเลือกให้ถูกต้อง..." + cReset)
 			time.Sleep(2 * time.Second)

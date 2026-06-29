@@ -44,19 +44,11 @@ func BuildOVPN(in OVPNInput) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read ca.crt: %w", err)
 	}
-	// Find the user's clients folder. Multi-Cert users live under the
-	// CA-specific folder; primary-CA users stay at pki.ClientsDir.
-	clientsDir := pki.ClientsDir
-	if db, err := Load(); err == nil {
-		if rec, ok := db.Users[in.Username]; ok && rec.CA != "" {
-			clientsDir = pki.ExtraCAClientsDir(rec.CA)
-		}
-	}
-	clientCert, err := os.ReadFile(clientsDir + "/" + in.Username + ".crt")
+	clientCert, err := os.ReadFile(pki.ClientsDir + "/" + in.Username + ".crt")
 	if err != nil {
 		return nil, fmt.Errorf("read client cert for %s: %w", in.Username, err)
 	}
-	clientKey, err := os.ReadFile(clientsDir + "/" + in.Username + ".key")
+	clientKey, err := os.ReadFile(pki.ClientsDir + "/" + in.Username + ".key")
 	if err != nil {
 		return nil, fmt.Errorf("read client key for %s: %w", in.Username, err)
 	}
