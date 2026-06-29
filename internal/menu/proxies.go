@@ -1,12 +1,17 @@
 // proxies.go: SOCKS proxy sub-menu (conexao option 4).
 //
-// UI mirrors v1 conexao fun_socks() exactly:
+// UI mirrors v1 conexao fun_socks() with the per-slot "เปลี่ยนสถานะ"
+// (change-status) entries removed — operators set the response status
+// once at install time via the preset list and never touched the runtime
+// editor, so it was dead UI surface.
+//
 //   [1] SOCKS SSH   ◉/○  (พอร์ต: XXXX)
 //   [2] WEBSOCKET   ◉/○  (พอร์ต: XXXX)
 //   [3] SOCKS OPENVPN ◉/○ (พอร์ต: XXXX)
 //   [4] เปิดพอร์ต
-//   [5] เปลี่ยนสถานะ SOCKS SSH
-//   [6] เปลี่ยนสถานะ WEBSOCKET
+//   [5] รีสตาร์ท SOCKS SSH
+//   [6] รีสตาร์ท WEBSOCKET
+//   [7] รีสตาร์ท SOCKS OPENVPN
 //   [0] ย้อนกลับ
 //
 // Selecting 1/2/3 toggles the proxy on/off (install flow when off,
@@ -68,23 +73,6 @@ var proxySlots = []proxySlot{
 	},
 }
 
-// colorPicker maps v1's 10-option color menu to HTML color names.
-var colorPicker = []struct {
-	label string
-	value string
-}{
-	{"สีน้ำเงิน", "blue"},
-	{"สีเขียว", "green"},
-	{"สีแดง", "red"},
-	{"สีเหลือง", "yellow"},
-	{"สีชมพู", "#F535AA"},
-	{"สีฟ้า", "cyan"},
-	{"สีส้ม", "#FF7F00"},
-	{"สีม่วง", "#9932CD"},
-	{"สีดำ", "black"},
-	{"ไม่มีสี", "null"},
-}
-
 // proxyPresets for install flow (1-5).
 var proxyCodePresets = []struct {
 	idx  string
@@ -126,14 +114,10 @@ func runProxies(r *bufio.Reader) error {
 		case "4":
 			proxyOpenPort(r, db)
 		case "5":
-			proxyChangeStatus(r, db, &proxySlots[0])
-		case "6":
-			proxyChangeStatus(r, db, &proxySlots[1])
-		case "7":
 			proxyRestartSlot(r, db, &proxySlots[0])
-		case "8":
+		case "6":
 			proxyRestartSlot(r, db, &proxySlots[1])
-		case "9":
+		case "7":
 			proxyRestartSlot(r, db, &proxySlots[2])
 		default:
 			fmt.Println("\n" + cRedBold + "[ผิดพลาด]" + cYelBold + " ตัวเลือกไม่ถูกต้อง" + cReset)
@@ -242,11 +226,9 @@ func paintSocksMenu() {
 		{"2", "WEBSOCKET"},
 		{"3", "SOCKS OPENVPN"},
 		{"4", "เปิดพอร์ต"},
-		{"5", "เปลี่ยนสถานะ SOCKS SSH"},
-		{"6", "เปลี่ยนสถานะ WEBSOCKET"},
-		{"7", "รีสตาร์ท SOCKS SSH"},
-		{"8", "รีสตาร์ท WEBSOCKET"},
-		{"9", "รีสตาร์ท SOCKS OPENVPN"},
+		{"5", "รีสตาร์ท SOCKS SSH"},
+		{"6", "รีสตาร์ท WEBSOCKET"},
+		{"7", "รีสตาร์ท SOCKS OPENVPN"},
 	}
 	for _, it := range items {
 		fmt.Printf("\033[1;31m[\033[1;36m%s\033[1;31m] \033[1;37m• \033[1;33m%s\033[0m\n", it.idx, it.label)
@@ -520,91 +502,6 @@ func proxyOpenPort(r *bufio.Reader, db *proxy.DB) {
 	} else {
 		fmt.Println(cRedBold + "[ผิดพลาด] เปิดพอร์ตไม่สำเร็จ — ตรวจสอบ ufw/iptables" + cReset)
 	}
-	waitEnter(r)
-}
-
-// proxyChangeStatus (options 5/6): lets the operator set a custom status
-// message + font color. When multiple instances exist, asks which one.
-func proxyChangeStatus(r *bufio.Reader, db *proxy.DB, s *proxySlot) {
-	clearScreen()
-	printSep()
-	fmt.Println(cWhtBold + "เปลี่ยนสถานะ " + s.label + cReset)
-	printSep()
-	fmt.Println()
-
-	entries := slotEntries(db, s)
-	if len(entries) == 0 {
-		fmt.Println(cRedBold + "ฟังก์ชันไม่พร้อมใช้งาน" + cReset)
-		fmt.Println()
-		fmt.Println(cYelBold + "กรุณาเปิดใช้งาน " + s.label + " ก่อน !" + cReset)
-		waitEnter(r)
-		return
-	}
-
-	var cfg proxy.Config
-	if len(entries) == 1 {
-		cfg = entries[0]
-	} else {
-		// Multiple instances — ask which port.
-		for i, e := range entries {
-			fmt.Printf("%s[%s%d%s] %s• %sพอร์ต %d%s\n",
-				cRedBold, cCyanBold, i+1, cRedBold, cWhtBold, cYelBold, e.Port, cReset)
-		}
-		fmt.Println()
-		choice, _ := menuPrompt(r)
-		n, _ := strconv.Atoi(strings.TrimSpace(choice))
-		if n < 1 || n > len(entries) {
-			return
-		}
-		cfg = entries[n-1]
-		fmt.Println()
-	}
-
-	fmt.Printf(cYelBold+"สถานะปัจจุบัน: "+cGrnBold+"%s\n\n"+cReset, cfg.StatusMsg)
-
-	text, err := promptLine(r, "ใส่ข้อความสถานะของคุณ : ")
-	if err != nil {
-		return
-	}
-
-	fmt.Println()
-	for i, c := range colorPicker {
-		fmt.Printf("\033[1;31m[\033[1;36m%02d\033[1;31m]\033[1;33m %s\033[0m\n", i+1, c.label)
-	}
-	fmt.Println()
-	colorChoice, err := promptLine(r, "เลือกสีใด ? : ")
-	if err != nil {
-		return
-	}
-	n, _ := strconv.Atoi(strings.TrimSpace(colorChoice))
-	color := "null"
-	if n >= 1 && n <= len(colorPicker) {
-		color = colorPicker[n-1].value
-	}
-
-	cfg.StatusMsg = fmt.Sprintf(`<font color="%s">%s</font>`, color, text)
-	dbSet(db, cfg)
-	fmt.Println()
-
-	unitName := cfg.UnitName()
-	if err := progress.Run([]progress.Step{
-		{Label: "บันทึก config + เขียน unit file", Work: func() error {
-			if err := db.Save(); err != nil {
-				return err
-			}
-			_, _, _, _ = proxy.WriteUnit(cfg)
-			return nil
-		}},
-		{Label: "รีสตาร์ท " + s.label, Work: func() error {
-			return systemctlRun("restart", unitName)
-		}},
-	}); err != nil {
-		fmt.Println("\n" + cRedBold + "[ผิดพลาด] " + err.Error() + cReset)
-		waitEnter(r)
-		return
-	}
-
-	fmt.Println("\n" + cGrnBold + "เปลี่ยนสถานะสำเร็จแล้ว!" + cReset)
 	waitEnter(r)
 }
 
