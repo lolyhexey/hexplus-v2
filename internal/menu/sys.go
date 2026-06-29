@@ -22,6 +22,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/lolyhexey/hexplus/internal/progress"
 	"github.com/showwin/speedtest-go/speedtest"
 )
 
@@ -67,52 +68,49 @@ func ensureRootMenu(r *bufio.Reader) bool {
 // keeps hexplus single-binary, and on a freshly-installed VPS there is no
 // `speedtest` to call.
 func runSpeedTest(r *bufio.Reader) error {
-	sysHeader("ทดสอบความเร็วเซิร์ฟเวอร์ (speedtest.net)")
+	sysHeader("ทดสอบความเร็วเน็ต")
 
 	client := speedtest.New()
-	fmt.Println(cGrnBold + "กำลังค้นหาเซิร์ฟเวอร์ใกล้สุด ..." + cReset)
-	servers, err := client.FetchServers()
-	if err != nil {
-		fmt.Println("\n" + cRedBold + "[ผิดพลาด] ดึงรายชื่อเซิร์ฟเวอร์ไม่ได้: " + cYelBold + err.Error() + cReset)
+	var s *speedtest.Server
+	steps := []progress.Step{
+		{Label: "ค้นหาเซิร์ฟเวอร์ใกล้สุด", Work: func() error {
+			servers, err := client.FetchServers()
+			if err != nil {
+				return fmt.Errorf("ดึงรายชื่อเซิร์ฟเวอร์: %w", err)
+			}
+			targets, err := servers.FindServer(nil)
+			if err != nil || len(targets) == 0 {
+				return fmt.Errorf("หาเซิร์ฟเวอร์ที่เหมาะสมไม่ได้")
+			}
+			s = targets[0]
+			return nil
+		}},
+		{Label: "วัด PING + JITTER", Work: func() error { return s.PingTest(nil) }},
+		{Label: "วัด DOWNLOAD", Work: func() error { return s.DownloadTest() }},
+		{Label: "วัด UPLOAD", Work: func() error { return s.UploadTest() }},
+	}
+	if err := progress.Run(steps); err != nil {
+		fmt.Println("\n" + cRedBold + "[ผิดพลาด] " + cYelBold + err.Error() + cReset)
 		waitEnter(r)
 		return nil
 	}
-	targets, err := servers.FindServer(nil)
-	if err != nil || len(targets) == 0 {
-		fmt.Println("\n" + cRedBold + "[ผิดพลาด] หาเซิร์ฟเวอร์ที่เหมาะสมไม่ได้" + cReset)
-		waitEnter(r)
-		return nil
-	}
-	s := targets[0]
-	fmt.Printf("%sใช้เซิร์ฟเวอร์%s: %s%s%s (%s%s%s, %s%.0f km%s)\n\n",
+
+	fmt.Println()
+	printSep()
+	fmt.Printf("%sเซิร์ฟเวอร์%s: %s%s%s (%s%s%s, %s%.0f km%s)\n",
 		cYelBold, cWhtBold,
 		cGrnBold, s.Sponsor, cWhtBold,
 		cYelBold, s.Name, cWhtBold,
 		cCyanBold, s.Distance, cReset)
-
-	fmt.Println(cGrnBold + "กำลังวัด PING ..." + cReset)
-	if err := s.PingTest(nil); err != nil {
-		fmt.Println(cRedBold + "  ping ผิดพลาด: " + cYelBold + err.Error() + cReset)
-	}
-	fmt.Println(cGrnBold + "กำลังวัด DOWNLOAD ..." + cReset)
-	if err := s.DownloadTest(); err != nil {
-		fmt.Println(cRedBold + "  download ผิดพลาด: " + cYelBold + err.Error() + cReset)
-	}
-	fmt.Println(cGrnBold + "กำลังวัด UPLOAD ..." + cReset)
-	if err := s.UploadTest(); err != nil {
-		fmt.Println(cRedBold + "  upload ผิดพลาด: " + cYelBold + err.Error() + cReset)
-	}
-
-	printSep()
-	fmt.Printf("%sPING%s    : %s%.0f ms%s\n",
+	fmt.Printf("%sPING%s     : %s%.0f ms%s\n",
 		cGrnBold, cReset, cWhtBold,
 		float64(s.Latency.Microseconds())/1000.0, cReset)
-	fmt.Printf("%sJITTER%s  : %s%.0f ms%s\n",
+	fmt.Printf("%sJITTER%s   : %s%.0f ms%s\n",
 		cGrnBold, cReset, cWhtBold,
 		float64(s.Jitter.Microseconds())/1000.0, cReset)
-	fmt.Printf("%sDOWNLOAD%s: %s%s%s\n",
+	fmt.Printf("%sDOWNLOAD%s : %s%s%s\n",
 		cGrnBold, cReset, cWhtBold, s.DLSpeed, cReset)
-	fmt.Printf("%sUPLOAD%s  : %s%s%s\n",
+	fmt.Printf("%sUPLOAD%s   : %s%s%s\n",
 		cGrnBold, cReset, cWhtBold, s.ULSpeed, cReset)
 	printSep()
 
