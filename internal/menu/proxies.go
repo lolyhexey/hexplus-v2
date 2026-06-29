@@ -93,10 +93,9 @@ var proxyCodePresets = []struct {
 	desc string
 }{
 	{"1", "200", `Connection established\r\nContent-length: 0`, "200 HTTP CONNECT proxy + Content-length (แนะนำ — สำหรับ SOCKS SSH)"},
-	{"2", "101", `<font color="null">HEXPLUS</font>`, "101 WebSocket spoof handshake"},
+	{"2", "101", `<font color="null">HEXPLUS</font>`, "101 Switching Protocols"},
 	{"3", "400", `<font color="null">HEXPLUS</font>\r\nContent-length: 0`, "400 Bad Request spoof + Content-length"},
 	{"4", "520", `<font color="null">HEXPLUS</font>\r\nContent-length: 0`, "520 Cloudflare error spoof + Content-length"},
-	{"5", "", "", "กำหนดเอง"},
 }
 
 // runProxies is the entry point wired in conexao.go option 4.
@@ -385,7 +384,7 @@ func proxyInstall(r *bufio.Reader, db *proxy.DB, s *proxySlot) error {
 	for _, p := range proxyCodePresets {
 		fmt.Printf("  \033[1;31m[\033[1;36m%s\033[1;31m] \033[1;33m%s\033[0m\n", p.idx, p.desc)
 	}
-	codeChoice, err := promptLine(r, "เลือก [1-5] (default: 1): ")
+	codeChoice, err := promptLine(r, "เลือก [1-4] (default: 1): ")
 	if err != nil {
 		return err
 	}
@@ -393,35 +392,18 @@ func proxyInstall(r *bufio.Reader, db *proxy.DB, s *proxySlot) error {
 		codeChoice = "1"
 	}
 
-	var statusCode, defaultMsg string
-	switch codeChoice {
-	case "1", "2", "3", "4":
-		for _, p := range proxyCodePresets {
-			if p.idx == codeChoice {
-				statusCode = p.code
-				defaultMsg = p.msg
-			}
+	var statusCode, msg string
+	matched := false
+	for _, p := range proxyCodePresets {
+		if p.idx == codeChoice {
+			statusCode = p.code
+			msg = p.msg
+			matched = true
+			break
 		}
-	case "5":
-		statusCode, err = promptLine(r, "Status code (เช่น 200): ")
-		if err != nil {
-			return err
-		}
-		if statusCode == "" {
-			return fmt.Errorf("status code ห้ามว่าง")
-		}
-		defaultMsg = ""
-	default:
+	}
+	if !matched {
 		return fmt.Errorf("ตัวเลือกไม่ถูกต้อง: %q", codeChoice)
-	}
-
-	msgPrompt := fmt.Sprintf(`RESPONSE MSG [%s]: `, defaultMsg)
-	msg, err := promptLine(r, msgPrompt)
-	if err != nil {
-		return err
-	}
-	if msg == "" {
-		msg = defaultMsg
 	}
 
 	// Key: "{type}-{port}" so multiple instances of the same type coexist.
