@@ -42,10 +42,6 @@ jobs:
             unameArch: x86_64    # what `uname -m` reports on this CPU
             runner: ubuntu-latest
             platform: linux/amd64
-          - arch: arm64
-            unameArch: arm64
-            runner: ubuntu-24.04-arm
-            platform: linux/arm64
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
@@ -147,11 +143,20 @@ jobs:
           path: dist
           merge-multiple: true
 
+      - name: Mirror binary under both canonical names
+        # amd64 and x86_64 are the same architecture — uname -m says
+        # x86_64, Go uses amd64. Ship both names so users searching for
+        # either find it; bytes are identical.
+        working-directory: dist
+        run: |
+          cp hexplus-x86_64 hexplus-linux-amd64
+          mv hexplus-x86_64 hexplus-linux-x86_64
+
       - name: Generate SHA256SUMS
         working-directory: dist
         run: |
           ls -lh .
-          sha256sum hexplus-x86_64 hexplus-arm64 > SHA256SUMS
+          sha256sum hexplus-linux-amd64 hexplus-linux-x86_64 > SHA256SUMS
           cat SHA256SUMS
 
       - name: Create or update GitHub Release
@@ -162,6 +167,6 @@ jobs:
           generate_release_notes: true
           fail_on_unmatched_files: true
           files: |
-            dist/hexplus-x86_64
-            dist/hexplus-arm64
+            dist/hexplus-linux-amd64
+            dist/hexplus-linux-x86_64
             dist/SHA256SUMS
