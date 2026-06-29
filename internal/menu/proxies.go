@@ -92,7 +92,7 @@ var proxyCodePresets = []struct {
 	msg  string
 	desc string
 }{
-	{"1", "200", `Connection established\r\nContent-length: 0`, "200 HTTP CONNECT proxy + Content-length (แนะนำ — สำหรับ SOCKS SSH)"},
+	{"1", "200", `Connection established`, "200 Connection established (แนะนำ — สำหรับ SOCKS SSH)"},
 	{"2", "101", `<font color="null">HEXPLUS</font>`, "101 Switching Protocols"},
 	{"3", "400", `<font color="null">HEXPLUS</font>\r\nContent-length: 0`, "400 Bad Request spoof + Content-length"},
 	{"4", "520", `<font color="null">HEXPLUS</font>\r\nContent-length: 0`, "520 Cloudflare error spoof + Content-length"},
