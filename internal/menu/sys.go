@@ -14,7 +14,6 @@ import (
 	"compress/gzip"
 	"fmt"
 	"io"
-	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -22,6 +21,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/showwin/speedtest-go/speedtest"
 )
 
 // ---------------------------------------------------------------------
@@ -56,63 +57,63 @@ func ensureRootMenu(r *bufio.Reader) bool {
 // 11 SPEED TEST
 // ---------------------------------------------------------------------
 
-// runSpeedTest measures latency to ipv4.icanhazip.com (HTTP GET RTT) and
-// downloads a 10 MB file from speed.hetzner.de to estimate throughput.
-// Both endpoints are unauthenticated public benchmark services.
+// runSpeedTest uses the speedtest.net (Ookla) infrastructure via the
+// showwin/speedtest-go library: it pulls the server list over HTTP, picks
+// the closest one to this VPS by geo-distance, then runs the proper
+// bidirectional protocol (TCP-bound parallel streams) for latency,
+// download, and upload — the same numbers speedtest.net's own CLI reports.
+//
+// We deliberately do NOT shell out to the `speedtest` binary: the library
+// keeps hexplus single-binary, and on a freshly-installed VPS there is no
+// `speedtest` to call.
 func runSpeedTest(r *bufio.Reader) error {
-	sysHeader("ทดสอบความเร็วเซิร์ฟเวอร์")
+	sysHeader("ทดสอบความเร็วเซิร์ฟเวอร์ (speedtest.net)")
 
-	client := &http.Client{Timeout: 60 * time.Second}
-
-	// Ping-style RTT: time to first byte of a tiny endpoint.
-	fmt.Println(cGrnBold + "กำลังวัด PING ..." + cReset)
-	pingMs := ""
-	t0 := time.Now()
-	resp, err := client.Get("http://ipv4.icanhazip.com")
+	client := speedtest.New()
+	fmt.Println(cGrnBold + "กำลังค้นหาเซิร์ฟเวอร์ใกล้สุด ..." + cReset)
+	servers, err := client.FetchServers()
 	if err != nil {
-		pingMs = "ผิดพลาด: " + err.Error()
-	} else {
-		_, _ = io.Copy(io.Discard, resp.Body)
-		resp.Body.Close()
-		pingMs = fmt.Sprintf("%.0f ms", float64(time.Since(t0).Microseconds())/1000.0)
+		fmt.Println("\n" + cRedBold + "[ผิดพลาด] ดึงรายชื่อเซิร์ฟเวอร์ไม่ได้: " + cYelBold + err.Error() + cReset)
+		waitEnter(r)
+		return nil
 	}
+	targets, err := servers.FindServer(nil)
+	if err != nil || len(targets) == 0 {
+		fmt.Println("\n" + cRedBold + "[ผิดพลาด] หาเซิร์ฟเวอร์ที่เหมาะสมไม่ได้" + cReset)
+		waitEnter(r)
+		return nil
+	}
+	s := targets[0]
+	fmt.Printf("%sใช้เซิร์ฟเวอร์%s: %s%s%s (%s%s%s, %s%.0f km%s)\n\n",
+		cYelBold, cWhtBold,
+		cGrnBold, s.Sponsor, cWhtBold,
+		cYelBold, s.Name, cWhtBold,
+		cCyanBold, s.Distance, cReset)
 
-	// Throughput: try multiple 10 MB sources in order (first one that responds wins).
+	fmt.Println(cGrnBold + "กำลังวัด PING ..." + cReset)
+	if err := s.PingTest(nil); err != nil {
+		fmt.Println(cRedBold + "  ping ผิดพลาด: " + cYelBold + err.Error() + cReset)
+	}
 	fmt.Println(cGrnBold + "กำลังวัด DOWNLOAD ..." + cReset)
-	mbps := ""
-	downloadURLs := []string{
-		"http://speed.hetzner.de/10MB.bin",
-		"http://speedtest.tele2.net/10MB.zip",
-		"http://ipv4.download.thinkbroadband.com/10MB.zip",
-		"http://cachefly.cachefly.net/10mb.test",
+	if err := s.DownloadTest(); err != nil {
+		fmt.Println(cRedBold + "  download ผิดพลาด: " + cYelBold + err.Error() + cReset)
 	}
-	t1 := time.Now()
-	for _, url := range downloadURLs {
-		t1 = time.Now()
-		resp2, dlErr := client.Get(url)
-		if dlErr != nil {
-			continue
-		}
-		n, copyErr := io.Copy(io.Discard, resp2.Body)
-		resp2.Body.Close()
-		dur := time.Since(t1).Seconds()
-		if copyErr != nil || n == 0 {
-			continue
-		}
-		if dur > 0 {
-			mbps = fmt.Sprintf("%.2f Mbps", float64(n)*8/(dur*1_000_000))
-		} else {
-			mbps = "ไม่สามารถวัดได้"
-		}
-		break
-	}
-	if mbps == "" {
-		mbps = "ผิดพลาด: ไม่สามารถเชื่อมต่อแหล่งทดสอบได้"
+	fmt.Println(cGrnBold + "กำลังวัด UPLOAD ..." + cReset)
+	if err := s.UploadTest(); err != nil {
+		fmt.Println(cRedBold + "  upload ผิดพลาด: " + cYelBold + err.Error() + cReset)
 	}
 
 	printSep()
-	fmt.Printf("%sPING:%s     %s%s%s\n", cGrnBold, cReset, cWhtBold, pingMs, cReset)
-	fmt.Printf("%sDOWNLOAD:%s %s%s%s\n", cGrnBold, cReset, cWhtBold, mbps, cReset)
+	fmt.Printf("%sPING%s    : %s%.0f ms%s\n",
+		cGrnBold, cReset, cWhtBold,
+		float64(s.Latency.Microseconds())/1000.0, cReset)
+	fmt.Printf("%sJITTER%s  : %s%.0f ms%s\n",
+		cGrnBold, cReset, cWhtBold,
+		float64(s.Jitter.Microseconds())/1000.0, cReset)
+	fmt.Printf("%sDOWNLOAD%s: %s%s%s\n",
+		cGrnBold, cReset, cWhtBold, s.DLSpeed, cReset)
+	fmt.Printf("%sUPLOAD%s  : %s%s%s\n",
+		cGrnBold, cReset, cWhtBold, s.ULSpeed, cReset)
 	printSep()
 
 	waitEnter(r)
