@@ -121,6 +121,20 @@ func paintConexaoHeader() {
 		fmt.Printf("%sบริการ: %s%s %sพอร์ต: %s%d%s\n",
 			cWhtBold, cYelBold, pair.label, cWhtBold, cCyanBold, port, cReset)
 	}
+	// SSL TUNNEL: port comes from the JSON config, not service.Service.
+	if exec.Command("systemctl", "is-active", "--quiet", ssltunnel.UnitName).Run() == nil {
+		if cfg, err := ssltunnel.Load(); err == nil && cfg.Port > 0 {
+			fmt.Printf("%sบริการ: %sSSL TUNNEL %sพอร์ต: %s%d%s\n",
+				cWhtBold, cYelBold, cWhtBold, cCyanBold, cfg.Port, cReset)
+		}
+	}
+	// SSLH MULTIPLEX: same shape as SSL TUNNEL.
+	if exec.Command("systemctl", "is-active", "--quiet", sslhmux.UnitName).Run() == nil {
+		if cfg, err := sslhmux.Load(); err == nil && cfg.Port > 0 {
+			fmt.Printf("%sบริการ: %sSSLH MULTIPLEX %sพอร์ต: %s%d%s\n",
+				cWhtBold, cYelBold, cWhtBold, cCyanBold, cfg.Port, cReset)
+		}
+	}
 	// Proxy SOCKS: show all active proxy ports (may be multiple)
 	if proxyPorts := activeProxyPorts(); len(proxyPorts) > 0 {
 		strs := make([]string, len(proxyPorts))
