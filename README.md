@@ -3,12 +3,12 @@
 เครื่องมือจัดการ VPS สำหรับงาน SSH/VPN แบบ single binary ไม่ต้อง `apt install` ไม่มี script ที่ต้อง extract ออกมา — binary เดียวคือทั้ง installer, menu, และ management surface
 
 ```bash
-wget https://github.com/lolyhexey/hexplus-v2/releases/latest/download/hexplus-linux-$(uname -m) -O /usr/local/bin/menu
-chmod +x /usr/local/bin/menu
-menu
+wget https://github.com/lolyhexey/hexplus-v2/releases/latest/download/hexplus-linux-$(uname -m) -O /usr/local/bin/hexplus
+chmod +x /usr/local/bin/hexplus
+hexplus
 ```
 
-`uname -m` คืน `x86_64` บน Intel/AMD 64-bit (VPS ทั่วไป) — script จะดาวน์โหลด binary ที่ตรงกับ CPU ของเครื่องเองโดยไม่ต้องเลือก ติดตั้งลง `/usr/local/bin/menu` ครั้งเดียวจบ พิมพ์ `menu` จากไหนก็ได้
+`uname -m` คืน `x86_64` บน Intel/AMD 64-bit (VPS ทั่วไป) — script จะดาวน์โหลด binary ที่ตรงกับ CPU ของเครื่องเองโดยไม่ต้องเลือก ติดตั้งลง `/usr/local/bin/hexplus` ตรง path ที่ systemd unit + self-install ใช้อยู่แล้ว ไม่มีไฟล์ซ้ำ พิมพ์ `hexplus` จากไหนก็ได้
 
 ---
 
