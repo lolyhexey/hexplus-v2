@@ -27,6 +27,18 @@ type AddInput struct {
 	Password      string
 	ExpiresInDays int
 	Limit         int
+	// CA optionally names an extra CA from /etc/openvpn/pki/extra/<CA>/
+	// that should sign this user's client cert. Empty = primary CA
+	// (default behavior, byte-for-byte compatible with single-CA installs).
+	CA string
+}
+
+// clientsDirForCA returns the per-CA clients folder ("" -> primary CA).
+func clientsDirForCA(ca string) string {
+	if ca == "" {
+		return pki.ClientsDir
+	}
+	return pki.ExtraCAClientsDir(ca)
 }
 
 // AddResult is what Add reports back: bytes of the generated .ovpn so
@@ -63,7 +75,14 @@ func Add(in AddInput, ovpnIn OVPNInput) (AddResult, error) {
 
 	// PKI must be initialized first. We load the CA early so we can
 	// fail before touching /etc/passwd if pki init hasn't been run.
-	ca, err := pki.LoadCA()
+	// An optional in.CA selects an extra CA from the Multi-Cert pool;
+	// empty falls back to the primary CA.
+	var ca *pki.Cert
+	if in.CA == "" {
+		ca, err = pki.LoadCA()
+	} else {
+		ca, err = pki.LoadExtraCA(in.CA)
+	}
 	if err != nil {
 		return res, err
 	}
@@ -99,11 +118,12 @@ func Add(in AddInput, ovpnIn OVPNInput) (AddResult, error) {
 	if err != nil {
 		return res, fmt.Errorf("sign client cert: %w", err)
 	}
-	if err := os.MkdirAll(pki.ClientsDir, 0o700); err != nil {
-		return res, fmt.Errorf("mkdir %s: %w", pki.ClientsDir, err)
+	clientsDir := clientsDirForCA(in.CA)
+	if err := os.MkdirAll(clientsDir, 0o700); err != nil {
+		return res, fmt.Errorf("mkdir %s: %w", clientsDir, err)
 	}
-	certPath := pki.ClientsDir + "/" + in.Name + ".crt"
-	keyPath := pki.ClientsDir + "/" + in.Name + ".key"
+	certPath := clientsDir + "/" + in.Name + ".crt"
+	keyPath := clientsDir + "/" + in.Name + ".key"
 	if err := os.WriteFile(certPath, clientCert.CertPEM, 0o644); err != nil {
 		return res, fmt.Errorf("write %s: %w", certPath, err)
 	}
@@ -129,6 +149,7 @@ func Add(in AddInput, ovpnIn OVPNInput) (AddResult, error) {
 		CreatedAt: time.Now().UTC().Truncate(time.Second),
 		ExpiresAt: expiresAt,
 		Limit:     in.Limit,
+		CA:        in.CA,
 	}
 	db.Users[in.Name] = rec
 	if err := db.Save(); err != nil {
@@ -150,17 +171,18 @@ func Remove(name string) error {
 	if err := DeleteSystemUser(name); err != nil {
 		return err
 	}
+	db, err := Load()
+	if err != nil {
+		return err
+	}
+	clientsDir := clientsDirForCA(db.Users[name].CA)
 	for _, p := range []string{
-		pki.ClientsDir + "/" + name + ".crt",
-		pki.ClientsDir + "/" + name + ".key",
+		clientsDir + "/" + name + ".crt",
+		clientsDir + "/" + name + ".key",
 	} {
 		if err := os.Remove(p); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return fmt.Errorf("remove %s: %w", p, err)
 		}
-	}
-	db, err := Load()
-	if err != nil {
-		return err
 	}
 	delete(db.Users, name)
 	return db.Save()
