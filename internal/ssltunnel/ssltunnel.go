@@ -193,7 +193,22 @@ func Run(ctx context.Context) error {
 	}
 }
 
+// handshakeTimeout bounds TLS handshake + initial peek so half-open scanners
+// don't pin a goroutine and an upstream conn forever.
+const handshakeTimeout = 10 * time.Second
+
 func handleConn(src net.Conn, target string) {
+	// Force handshake BEFORE dialing the upstream — scanners that open TCP
+	// but never start a handshake would otherwise leak both ends.
+	if tlsConn, ok := src.(*tls.Conn); ok {
+		hctx, cancel := context.WithTimeout(context.Background(), handshakeTimeout)
+		if err := tlsConn.HandshakeContext(hctx); err != nil {
+			cancel()
+			src.Close()
+			return
+		}
+		cancel()
+	}
 	dst, err := net.Dial("tcp", target)
 	if err != nil {
 		src.Close()

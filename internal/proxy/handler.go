@@ -48,10 +48,15 @@ const (
 	idleTimeout = 60 * time.Second
 )
 
-// allowedPrefixes mirrors v1's ALLOWED_PREFIXES tuple. X-Real-Host values
-// that don't start with one of these are rejected with 403, same as v1.
+// allowedHosts is the exact host whitelist for X-Real-Host. Compared by
+// equality on the host half of "host:port" — *not* by prefix, so
+// "127.0.0.1.evil.com:22" can't sneak past as "starts with 127.0.0.1".
 // DefaultHost is always trusted (it was set by the operator, not the client).
-var allowedPrefixes = []string{"127.0.0.1", "0.0.0.0", "localhost"}
+var allowedHosts = map[string]bool{
+	"127.0.0.1": true,
+	"0.0.0.0":   true,
+	"localhost": true,
+}
 
 // Handler holds the immutable per-proxy configuration that the request
 // path needs. Concurrency-safe: every field is read-only after New().
@@ -163,18 +168,17 @@ func (h *Handler) handleConn(client net.Conn) {
 		hostPort = h.cfg.DefaultHost
 	}
 
-	// Restrict X-Real-Host to the same prefixes v1 ALLOWED_PREFIXES enforced.
+	// Restrict X-Real-Host to the same hosts v1 ALLOWED_PREFIXES enforced,
+	// but compare on the host half of "host:port" with an exact match —
+	// not a prefix — so "127.0.0.1.evil.com:22" can't slip through.
 	// DefaultHost is operator-set so it's always trusted.
 	if fromClient {
-		allowed := false
-		lower := strings.ToLower(hostPort)
-		for _, p := range allowedPrefixes {
-			if strings.HasPrefix(lower, p) {
-				allowed = true
-				break
-			}
+		host, _, splitErr := net.SplitHostPort(hostPort)
+		if splitErr != nil {
+			_, _ = client.Write([]byte("HTTP/1.1 403 Forbidden!\r\n\r\n"))
+			return
 		}
-		if !allowed {
+		if !allowedHosts[strings.ToLower(host)] {
 			_, _ = client.Write([]byte("HTTP/1.1 403 Forbidden!\r\n\r\n"))
 			return
 		}

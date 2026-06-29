@@ -547,12 +547,29 @@ func runEnableRoot(r *bufio.Reader) error {
 		}
 	}
 	if !replaced {
-		// Append cleanly — trailing newline preserved.
-		if len(lines) > 0 && lines[len(lines)-1] == "" {
-			lines[len(lines)-1] = "PermitRootLogin yes"
-			lines = append(lines, "")
+		// Insert BEFORE the first Match block — global directives that
+		// fall inside a Match scope are rejected by sshd at startup.
+		insertAt := -1
+		for i, line := range lines {
+			if strings.HasPrefix(strings.TrimSpace(line), "Match ") {
+				insertAt = i
+				break
+			}
+		}
+		if insertAt < 0 {
+			// No Match block — append cleanly, preserving trailing newline.
+			if len(lines) > 0 && lines[len(lines)-1] == "" {
+				lines[len(lines)-1] = "PermitRootLogin yes"
+				lines = append(lines, "")
+			} else {
+				lines = append(lines, "PermitRootLogin yes")
+			}
 		} else {
-			lines = append(lines, "PermitRootLogin yes")
+			merged := make([]string, 0, len(lines)+1)
+			merged = append(merged, lines[:insertAt]...)
+			merged = append(merged, "PermitRootLogin yes")
+			merged = append(merged, lines[insertAt:]...)
+			lines = merged
 		}
 	}
 	if err := os.WriteFile(sshdConfigPath, []byte(strings.Join(lines, "\n")), 0o644); err != nil {

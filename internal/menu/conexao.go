@@ -15,7 +15,6 @@ import (
 	"bufio"
 	"bytes"
 	"fmt"
-	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -336,12 +335,10 @@ func sshAddPort(r *bufio.Reader, current []int) error {
 			return nil
 		}
 	}
-	if ln, err := net.Listen("tcp", fmt.Sprintf(":%d", newPort)); err != nil {
-		fmt.Printf("%s[ผิดพลาด] พอร์ต %d ถูกใช้งานอยู่แล้ว — เลือกพอร์ตอื่น%s\n", cRedBold, newPort, cReset)
+	if err := checkPortFree(newPort, "tcp"); err != nil {
+		fmt.Println("\n" + cRedBold + "[ผิดพลาด] " + cYelBold + err.Error() + cReset)
 		waitEnter(r)
 		return nil
-	} else {
-		ln.Close()
 	}
 	data, rdErr := os.ReadFile("/etc/ssh/sshd_config")
 	if rdErr != nil {
@@ -573,6 +570,11 @@ func ensureFalseShell() {
 
 // ensureSSHDirective guarantees that exactly one line "key val" exists in
 // the sshd_config text. Removes commented variants and duplicates.
+//
+// When the directive needs to be inserted, it lands BEFORE the first Match
+// block: directives that fall inside a Match block are scoped to it and
+// sshd refuses to start when global keywords (Port, PasswordAuthentication)
+// appear inside Match.
 func ensureSSHDirective(conf, key, val string, alreadyChanged bool) (string, bool) {
 	want := key + " " + val
 	var kept []string
@@ -592,7 +594,22 @@ func ensureSSHDirective(conf, key, val string, alreadyChanged bool) (string, boo
 		kept = append(kept, line)
 	}
 	if !found {
-		kept = append(kept, want)
+		insertAt := -1
+		for i, line := range kept {
+			if strings.HasPrefix(strings.TrimSpace(line), "Match ") {
+				insertAt = i
+				break
+			}
+		}
+		if insertAt < 0 {
+			kept = append(kept, want)
+		} else {
+			merged := make([]string, 0, len(kept)+1)
+			merged = append(merged, kept[:insertAt]...)
+			merged = append(merged, want)
+			merged = append(merged, kept[insertAt:]...)
+			kept = merged
+		}
 		changed = true
 	}
 	return strings.Join(kept, "\n"), changed

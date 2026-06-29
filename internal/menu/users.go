@@ -442,7 +442,7 @@ exit
 	_ = os.WriteFile(scriptPath, []byte(script), 0o755)
 
 	// Schedule deletion.
-	atOut, atErr := exec.Command("at", "-f", scriptPath, "now", "+", strconv.Itoa(minutes), "min").CombinedOutput()
+	atOut, atErr := exec.Command("at", "-f", scriptPath, "now", "+", strconv.Itoa(minutes), "minutes").CombinedOutput()
 	if atErr != nil {
 		fmt.Printf("%s[คำเตือน]%s at ล้มเหลว: %s — ลบด้วยตนเองเมื่อหมดเวลา%s\n",
 			cYelBold, cReset, strings.TrimSpace(string(atOut)), cReset)

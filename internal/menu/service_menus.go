@@ -1206,8 +1206,12 @@ func openvpnInstall(r *bufio.Reader, svc service.Service) error {
 	return nil
 }
 
-// setupNetworking enables IP forwarding and adds iptables SNAT so OpenVPN
-// clients can reach the internet. Mirrors v1 conexao lines 1358-1384.
+// setupNetworking enables IP forwarding and adds an iptables MASQUERADE so
+// OpenVPN clients can reach the internet. We use MASQUERADE (not SNAT --to)
+// because cloud VPS providers (GCP/AWS/Hetzner Cloud) usually give the box
+// a private interface IP and a separate public IP — SNAT --to <publicIP>
+// rejects packets because no interface owns that address. MASQUERADE picks
+// the egress interface's source IP automatically.
 // Failures are non-fatal — logged to stderr, installer continues.
 func setupNetworking(port int, proto, serverIP string) {
 	// 1. Enable IP forwarding immediately.
@@ -1236,9 +1240,10 @@ func setupNetworking(port int, proto, serverIP string) {
 		}
 	}
 
-	// 3. iptables SNAT — let VPN clients reach the internet.
+	// 3. iptables MASQUERADE — let VPN clients reach the internet via the
+	// box's actual egress interface, whatever its address happens to be.
 	exec.Command("iptables", "-t", "nat", "-A", "POSTROUTING",
-		"-s", "10.8.0.0/16", "-j", "SNAT", "--to", serverIP).Run()
+		"-s", "10.8.0.0/16", "-j", "MASQUERADE").Run()
 
 	// 4. Open the VPN port + allow forwarding if a DROP/REJECT policy exists.
 	out, _ := exec.Command("iptables", "-L", "-n").Output()
@@ -1272,10 +1277,11 @@ func setupNetworking(port int, proto, serverIP string) {
 	if _, err := os.Stat(rclocal); os.IsNotExist(err) {
 		_ = os.WriteFile(rclocal, []byte("#!/bin/sh -e\nexit 0\n"), 0o755)
 	}
+	_ = serverIP // kept for rc.local cleanup logic that may target legacy SNAT lines.
 	rules := []string{
 		"echo 1 > /proc/sys/net/ipv4/ip_forward",
 		"echo 1 > /proc/sys/net/ipv6/conf/all/disable_ipv6",
-		fmt.Sprintf("iptables -t nat -A POSTROUTING -s 10.8.0.0/16 -j SNAT --to %s", serverIP),
+		"iptables -t nat -A POSTROUTING -s 10.8.0.0/16 -j MASQUERADE",
 		"iptables -A INPUT -p tcp --dport 25 -j DROP",
 		"iptables -A INPUT -p tcp --dport 110 -j DROP",
 		"iptables -A OUTPUT -p tcp --dport 25 -j DROP",
@@ -1389,34 +1395,40 @@ func openvpnAskPKICustom(r *bufio.Reader) pki.InitOptions {
 
 // cleanupOpenVPN removes everything setupNetworking wrote and deletes
 // /etc/openvpn (including PKI). Matches v1's rmv_open() cleanup.
+//
+// Handles both the new MASQUERADE rule and the legacy SNAT --to <IP> rule
+// from older installs so an in-place upgrade still tears down cleanly.
 func cleanupOpenVPN() {
 	const rclocal = "/etc/rc.local"
 
-	// Read the server IP from rc.local before we delete anything — it's
-	// stored in the SNAT line "iptables -t nat -A POSTROUTING -s 10.8.0.0/16
-	// -j SNAT --to <IP>".
-	serverIP := ""
+	// Remove live MASQUERADE rule (post-fix).
+	if err := exec.Command("iptables", "-t", "nat", "-D", "POSTROUTING",
+		"-s", "10.8.0.0/16", "-j", "MASQUERADE").Run(); err == nil {
+		fmt.Println(cYelBold + "  - iptables MASQUERADE 10.8.0.0/16" + cReset)
+	}
+
+	// Read any legacy SNAT --to <IP> line from rc.local and tear it down too.
+	legacyIP := ""
 	if raw, err := os.ReadFile(rclocal); err == nil {
 		for _, line := range strings.Split(string(raw), "\n") {
 			if strings.Contains(line, "-j SNAT --to ") {
 				parts := strings.Fields(line)
 				for i, p := range parts {
 					if p == "--to" && i+1 < len(parts) {
-						serverIP = parts[i+1]
+						legacyIP = parts[i+1]
 					}
 				}
 			}
 		}
 	}
-
-	// Remove live iptables SNAT rule.
-	if serverIP != "" {
+	if legacyIP != "" {
 		exec.Command("iptables", "-t", "nat", "-D", "POSTROUTING",
-			"-s", "10.8.0.0/16", "-j", "SNAT", "--to", serverIP).Run()
-		fmt.Println(cYelBold + "  - iptables SNAT 10.8.0.0/16 → " + serverIP + cReset)
+			"-s", "10.8.0.0/16", "-j", "SNAT", "--to", legacyIP).Run()
+		fmt.Println(cYelBold + "  - iptables SNAT 10.8.0.0/16 → " + legacyIP + " (legacy)" + cReset)
 	}
 
-	// Clean rc.local: remove every line that setupNetworking injected.
+	// Clean rc.local: remove every line that setupNetworking injected
+	// (both the current MASQUERADE form and legacy SNAT --to lines).
 	cleanPrefixes := []string{
 		"echo 1 > /proc/sys/net/ipv4/ip_forward",
 		"echo 1 > /proc/sys/net/ipv6/conf/all/disable_ipv6",

@@ -209,6 +209,13 @@ func sslTunnelChangePort(r *bufio.Reader, cfg ssltunnel.Config) error {
 		waitEnter(r)
 		return nil
 	}
+	if port == cfg.Port {
+		fmt.Println("\n" + cYelBold + "พอร์ตเดิม — ไม่มีการเปลี่ยนแปลง" + cReset)
+		waitEnter(r)
+		return nil
+	}
+	// Skip checkPortFree on no-change; on actual change, the live tunnel
+	// is still bound to the OLD port, so the NEW port should be free.
 	if err := checkPortFree(port, "tcp"); err != nil {
 		fmt.Println("\n" + cRedBold + "[ผิดพลาด] " + cYelBold + err.Error() + cReset)
 		waitEnter(r)

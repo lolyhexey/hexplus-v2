@@ -16,7 +16,13 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"time"
 )
+
+// peekTimeout bounds how long handleMuxConn waits for the first bytes of a
+// connection. TCP scanners (or half-open clients) that connect but never
+// send anything would otherwise pin a goroutine + FD forever.
+const peekTimeout = 5 * time.Second
 
 const (
 	// DBPath stores the JSON config (port + backend addresses).
@@ -164,8 +170,10 @@ func Run(ctx context.Context) error {
 // handleMuxConn peeks up to 8 bytes, detects the protocol, dials the backend,
 // and bridges the connection. Silently closes on any error.
 func handleMuxConn(conn net.Conn, cfg Config) {
+	_ = conn.SetReadDeadline(time.Now().Add(peekTimeout))
 	peek := make([]byte, 8)
 	n, err := io.ReadFull(conn, peek)
+	_ = conn.SetReadDeadline(time.Time{})
 	// n==0 means no bytes at all; other errors besides ErrUnexpectedEOF are fatal.
 	if n == 0 || (err != nil && err != io.ErrUnexpectedEOF) {
 		conn.Close()
