@@ -93,7 +93,7 @@ var proxyCodePresets = []struct {
 	desc string
 }{
 	{"1", "200", `Connection established`, "200 Connection established"},
-	{"2", "101", `<font color="null">HEXPLUS</font>`, "101 Switching Protocols"},
+	{"2", "101", `Switching Protocols`, "101 Switching Protocols"},
 	{"3", "400", `Bad Request`, "400 Bad Request"},
 	{"4", "520", `Cloudflare`, "520 Cloudflare"},
 }
