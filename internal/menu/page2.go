@@ -687,9 +687,12 @@ func runTimeReboot(r *bufio.Reader) error {
 	fmt.Println()
 
 	fmt.Println(cGrnBold + "ตั้งค่ารีบูตอัตโนมัติ:" + cReset)
-	fmt.Println(cRedBold + "[" + cCyanBold + "1" + cRedBold + "] " + cYelBold + "ทุก N ชั่วโมง" + cReset)
-	fmt.Println(cRedBold + "[" + cCyanBold + "2" + cRedBold + "] " + cYelBold + "ทุกวัน เวลา HH:MM" + cReset)
-	fmt.Println(cRedBold + "[" + cCyanBold + "3" + cRedBold + "] " + cYelBold + "ทุกสัปดาห์ วันใด เวลา HH:MM" + cReset)
+	fmt.Println(cRedBold + "[" + cCyanBold + "1" + cRedBold + "] " + cYelBold + "ทุก N ชั่วโมง" +
+		cWhtBold + "             (เช่น 6 = ทุก 6 ชม.)" + cReset)
+	fmt.Println(cRedBold + "[" + cCyanBold + "2" + cRedBold + "] " + cYelBold + "ทุกวัน เวลา HH:MM" +
+		cWhtBold + "         (เช่น 04:30 = ตี 4 ครึ่ง)" + cReset)
+	fmt.Println(cRedBold + "[" + cCyanBold + "3" + cRedBold + "] " + cYelBold + "ทุกสัปดาห์ วันใด เวลา HH:MM" +
+		cWhtBold + "  (เช่น 1 03:00 = จันทร์ ตี 3)" + cReset)
 	fmt.Println(cRedBold + "[" + cCyanBold + "4" + cRedBold + "] " + cYelBold + "ปิดการรีบูตอัตโนมัติ" + cReset)
 	fmt.Println()
 	fmt.Print(cGrnBold + "เลือก: " + cReset)
@@ -702,7 +705,7 @@ func runTimeReboot(r *bufio.Reader) error {
 
 	switch choice {
 	case "1":
-		fmt.Print(cYelBold + "ทุก N ชั่วโมง (1-24): " + cReset)
+		fmt.Print(cYelBold + "จำนวนชั่วโมง 1-24 " + cWhtBold + "(เช่น " + cGrnBold + "6" + cWhtBold + " = ทุก 6 ชั่วโมง)" + cYelBold + ": " + cReset)
 		ln, _ := r.ReadString('\n')
 		n, err := strconv.Atoi(strings.TrimSpace(ln))
 		if err != nil || n < 1 || n > 24 {
@@ -711,7 +714,7 @@ func runTimeReboot(r *bufio.Reader) error {
 		cronLine = fmt.Sprintf("0 */%d * * * %s\n", n, cmd)
 		label = fmt.Sprintf("ทุก %d ชั่วโมง", n)
 	case "2":
-		fmt.Print(cYelBold + "เวลา (HH:MM, 24-ชั่วโมง): " + cReset)
+		fmt.Print(cYelBold + "เวลา 24-ชั่วโมง " + cWhtBold + "(เช่น " + cGrnBold + "04:30" + cWhtBold + " = ตี 4 ครึ่ง)" + cYelBold + ": " + cReset)
 		ln, _ := r.ReadString('\n')
 		hh, mm, err := parseHHMM(strings.TrimSpace(ln))
 		if err != nil {
@@ -720,13 +723,14 @@ func runTimeReboot(r *bufio.Reader) error {
 		cronLine = fmt.Sprintf("%d %d * * * %s\n", mm, hh, cmd)
 		label = fmt.Sprintf("ทุกวันเวลา %02d:%02d", hh, mm)
 	case "3":
-		fmt.Print(cYelBold + "วัน (0=อาทิตย์ ... 6=เสาร์): " + cReset)
+		fmt.Println(cWhtBold + "0=อาทิตย์  1=จันทร์  2=อังคาร  3=พุธ  4=พฤหัสบดี  5=ศุกร์  6=เสาร์" + cReset)
+		fmt.Print(cYelBold + "วัน (0-6) " + cWhtBold + "(เช่น " + cGrnBold + "1" + cWhtBold + " = จันทร์)" + cYelBold + ": " + cReset)
 		dowLn, _ := r.ReadString('\n')
 		dow, err := strconv.Atoi(strings.TrimSpace(dowLn))
 		if err != nil || dow < 0 || dow > 6 {
 			return errors.New("วันต้องเป็น 0-6")
 		}
-		fmt.Print(cYelBold + "เวลา (HH:MM): " + cReset)
+		fmt.Print(cYelBold + "เวลา 24-ชั่วโมง " + cWhtBold + "(เช่น " + cGrnBold + "03:00" + cWhtBold + " = ตี 3)" + cYelBold + ": " + cReset)
 		ln, _ := r.ReadString('\n')
 		hh, mm, err := parseHHMM(strings.TrimSpace(ln))
 		if err != nil {
