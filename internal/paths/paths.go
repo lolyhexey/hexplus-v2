@@ -14,6 +14,11 @@ const (
 	// SelfPath is the installed location of hexplus itself.
 	SelfPath = BinDir + "/hexplus"
 
+	// MenuShortcut is a symlink → SelfPath created at install time. Gives
+	// the operator a shorter command (`menu`) without renaming the canonical
+	// binary path that every systemd unit and self-install path bakes in.
+	MenuShortcut = BinDir + "/menu"
+
 	// LibDir is where the embedded static binaries land. Picked under
 	// /usr/local so distro-managed updates of openvpn / squid / openssh
 	// don't fight ours; LFHS says /usr/local/lib is for site software.

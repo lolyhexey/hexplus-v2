@@ -5,10 +5,11 @@
 ```bash
 wget https://github.com/lolyhexey/hexplus-v2/releases/latest/download/hexplus-linux-$(uname -m) -O /usr/local/bin/hexplus
 chmod +x /usr/local/bin/hexplus
-hexplus
+ln -sf /usr/local/bin/hexplus /usr/local/bin/menu
+menu
 ```
 
-`uname -m` คืน `x86_64` บน Intel/AMD 64-bit (VPS ทั่วไป) — script จะดาวน์โหลด binary ที่ตรงกับ CPU ของเครื่องเองโดยไม่ต้องเลือก ติดตั้งลง `/usr/local/bin/hexplus` ตรง path ที่ systemd unit + self-install ใช้อยู่แล้ว ไม่มีไฟล์ซ้ำ พิมพ์ `hexplus` จากไหนก็ได้
+`uname -m` คืน `x86_64` บน Intel/AMD 64-bit (VPS ทั่วไป) — binary หลักอยู่ที่ `/usr/local/bin/hexplus` (path ที่ systemd unit + self-install ใช้อยู่แล้ว ไม่มีไฟล์ซ้ำ); symlink `menu` เป็นทางลัดให้พิมพ์สั้นๆ จากที่ไหนก็ได้
 
 ---
 

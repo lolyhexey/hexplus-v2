@@ -34,11 +34,12 @@ import (
 // Re-export the legacy names so callers that already use install.LibDir etc.
 // keep compiling while we migrate them to the paths package directly.
 const (
-	BinDir     = paths.BinDir
-	LibDir     = paths.LibDir
-	StateDir   = paths.StateDir
-	MarkerFile = paths.MarkerFile
-	SelfPath   = paths.SelfPath
+	BinDir       = paths.BinDir
+	LibDir       = paths.LibDir
+	StateDir     = paths.StateDir
+	MarkerFile   = paths.MarkerFile
+	SelfPath     = paths.SelfPath
+	MenuShortcut = paths.MenuShortcut
 )
 
 // Result is what Install reports back to the CLI. Wrapper-only since v2.1:
@@ -90,6 +91,10 @@ func Install() (Result, error) {
 	}
 	res.SelfCopied = true
 
+	if err := ensureMenuShortcut(); err != nil {
+		return res, fmt.Errorf("install menu shortcut: %w", err)
+	}
+
 	if err := os.WriteFile(MarkerFile, []byte("ok\n"), 0o644); err != nil {
 		return res, fmt.Errorf("write marker: %w", err)
 	}
@@ -116,6 +121,14 @@ func Uninstall() error {
 		_, _ = service.UninstallService(svc)
 	}
 
+	// Remove the menu shortcut first — but only if it's actually our symlink
+	// pointing at SelfPath. We don't want to clobber an operator's own /menu
+	// script they may have dropped in /usr/local/bin.
+	if fi, err := os.Lstat(MenuShortcut); err == nil && fi.Mode()&os.ModeSymlink != 0 {
+		if target, err := os.Readlink(MenuShortcut); err == nil && target == SelfPath {
+			_ = os.Remove(MenuShortcut)
+		}
+	}
 	if err := os.Remove(SelfPath); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("remove %s: %w", SelfPath, err)
 	}
@@ -124,6 +137,36 @@ func Uninstall() error {
 	}
 	if err := os.Remove(MarkerFile); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("remove %s: %w", MarkerFile, err)
+	}
+	return nil
+}
+
+// ensureMenuShortcut creates /usr/local/bin/menu as a symlink to SelfPath
+// so operators can type `menu` instead of `hexplus`. Idempotent and
+// non-destructive:
+//   - if the link already points at SelfPath, no-op
+//   - if it points elsewhere (some other binary on the box), re-link to ours
+//   - if a regular file is in the way (operator's own /menu script), keep
+//     hands off and return nil — we don't want to delete unknown user files
+func ensureMenuShortcut() error {
+	fi, err := os.Lstat(MenuShortcut)
+	if err == nil {
+		if fi.Mode()&os.ModeSymlink == 0 {
+			// Not a symlink — operator probably has something of their own
+			// at /usr/local/bin/menu. Leave it alone; install still succeeds.
+			return nil
+		}
+		if target, _ := os.Readlink(MenuShortcut); target == SelfPath {
+			return nil
+		}
+		if err := os.Remove(MenuShortcut); err != nil {
+			return fmt.Errorf("replace %s: %w", MenuShortcut, err)
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("stat %s: %w", MenuShortcut, err)
+	}
+	if err := os.Symlink(SelfPath, MenuShortcut); err != nil {
+		return fmt.Errorf("symlink %s -> %s: %w", MenuShortcut, SelfPath, err)
 	}
 	return nil
 }
