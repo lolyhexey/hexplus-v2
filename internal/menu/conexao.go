@@ -443,7 +443,8 @@ func sshDeletePort(r *bufio.Reader, current []int) error {
 // every fresh VPS has the right sshd_config without extra steps.
 //
 // Uses the same idempotent pattern as v1:
-//   remove any existing line (commented or not) → append the wanted value
+//
+//	remove any existing line (commented or not) → append the wanted value
 //
 // Silently no-ops when not root or sshd_config is unreadable.
 // Restarts sshd only when at least one directive was changed.

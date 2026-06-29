@@ -17,12 +17,12 @@ import (
 )
 
 const (
-	barWidth   = 20
-	tickMs     = 80
-	fillChar   = '█'
-	emptyChar  = '░'
-	doneChar   = "✓"
-	failChar   = "✗"
+	barWidth  = 20
+	tickMs    = 80
+	fillChar  = '█'
+	emptyChar = '░'
+	doneChar  = "✓"
+	failChar  = "✗"
 )
 
 var spinFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}

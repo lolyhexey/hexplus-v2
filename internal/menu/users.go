@@ -106,9 +106,9 @@ func listAndPick(r *bufio.Reader, prompt string) (user.Record, error) {
 // systemUsers returns all non-root system accounts (UID ≥ 1000, ≠ nobody)
 // from /etc/passwd, the same source v1 uses for every user-management
 // screen. Metadata (limit) is merged from:
-//   1. /var/lib/hexplus/users.json  — v2 DB
-//   2. /root/usuarios.db            — v1 DB (format: "name limit\n")
-//   3. default limit = 1
+//  1. /var/lib/hexplus/users.json  — v2 DB
+//  2. /root/usuarios.db            — v1 DB (format: "name limit\n")
+//  3. default limit = 1
 func systemUsers() []user.Record {
 	raw, err := os.ReadFile("/etc/passwd")
 	if err != nil {

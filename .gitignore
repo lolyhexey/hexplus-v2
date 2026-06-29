@@ -29,3 +29,6 @@
 # Test outputs
 /tmp/
 *.log
+/hexplus_linux
+/hexplus_test
+/.claude/

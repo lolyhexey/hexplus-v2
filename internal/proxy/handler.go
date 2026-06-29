@@ -92,7 +92,6 @@ func NewHandler(cfg Config) (*Handler, error) {
 	return h, nil
 }
 
-
 // Serve runs the accept loop until ctx is done or the listener errors
 // fatally. Each accepted connection runs handleConn in its own
 // goroutine; cancellation propagates via ctx.

@@ -38,12 +38,12 @@ import (
 
 // proxySlot describes one of the three fixed SOCKS proxy slots.
 type proxySlot struct {
-	key         string // DB key: "ssh", "ws", "openvpn"
-	label       string // display label: "SOCKS SSH", "WEBSOCKET", "SOCKS OPENVPN"
-	defPort     int
-	defHost     string
-	defCode     string
-	defMsg      string
+	key     string // DB key: "ssh", "ws", "openvpn"
+	label   string // display label: "SOCKS SSH", "WEBSOCKET", "SOCKS OPENVPN"
+	defPort int
+	defHost string
+	defCode string
+	defMsg  string
 }
 
 var proxySlots = []proxySlot{
@@ -67,7 +67,7 @@ var proxySlots = []proxySlot{
 		key:     "openvpn",
 		label:   "SOCKS OPENVPN",
 		defPort: 1194,
-		defHost: "",  // filled at runtime from OpenVPN config
+		defHost: "", // filled at runtime from OpenVPN config
 		defCode: "101",
 		defMsg:  `<font color="null">HEXPLUS</font>`,
 	},

@@ -1133,8 +1133,8 @@ func openvpnInstall(r *bufio.Reader, svc service.Service) error {
 
 	// ---- ถาม Protocol ----
 	fmt.Println()
-	fmt.Printf(cRedBold+"["+cCyanBold+"1"+cRedBold+"] "+cYelBold+"UDP\n"+cReset)
-	fmt.Printf(cRedBold+"["+cCyanBold+"2"+cRedBold+"] "+cYelBold+"TCP (แนะนำ)\n"+cReset)
+	fmt.Printf(cRedBold + "[" + cCyanBold + "1" + cRedBold + "] " + cYelBold + "UDP\n" + cReset)
+	fmt.Printf(cRedBold + "[" + cCyanBold + "2" + cRedBold + "] " + cYelBold + "TCP (แนะนำ)\n" + cReset)
 	fmt.Println()
 	protoChoice, _ := promptLineDefault(r, "ต้องการใช้โปรโตคอลใดกับ OPENVPN?", "2")
 	proto := "tcp"
