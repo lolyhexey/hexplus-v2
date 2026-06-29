@@ -681,6 +681,11 @@ func dropbearInstall(r *bufio.Reader, svc service.Service) error {
 // ensureSSHDConfig adds PasswordAuthentication yes and PermitTunnel yes to
 // /etc/ssh/sshd_config (mirroring v1 Dropbear install). Restarts sshd after.
 // Returns nil if /etc/ssh/sshd_config doesn't exist (no OpenSSH installed).
+//
+// Delegates to ensureSSHDirective so both directives land OUTSIDE any
+// Match block. Appending blindly to EOF (the previous implementation)
+// landed them inside the trailing "Match User *,!root" block that
+// ensureSSHConfig writes at boot, scoping them away from root.
 func ensureSSHDConfig() error {
 	data, err := os.ReadFile("/etc/ssh/sshd_config")
 	if err != nil {
@@ -688,25 +693,11 @@ func ensureSSHDConfig() error {
 	}
 	conf := string(data)
 	changed := false
-	for _, directive := range []string{"PasswordAuthentication yes", "PermitTunnel yes"} {
-		key := strings.Fields(directive)[0]
-		if strings.Contains(conf, directive) {
-			continue
-		}
-		// Remove any existing conflicting directive for this key.
-		var lines []string
-		for _, line := range strings.Split(conf, "\n") {
-			if strings.HasPrefix(strings.TrimSpace(line), key+" ") {
-				continue
-			}
-			lines = append(lines, line)
-		}
-		conf = strings.Join(lines, "\n")
-		if !strings.HasSuffix(conf, "\n") {
-			conf += "\n"
-		}
-		conf += directive + "\n"
-		changed = true
+	for _, kv := range [][2]string{
+		{"PasswordAuthentication", "yes"},
+		{"PermitTunnel", "yes"},
+	} {
+		conf, changed = ensureSSHDirective(conf, kv[0], kv[1], changed)
 	}
 	if !changed {
 		return nil
@@ -1181,7 +1172,7 @@ func openvpnInstall(r *bufio.Reader, svc service.Service) error {
 			return pki.WriteServerConf(port, proto, dnsChoice, ipLine)
 		}},
 		{Label: "ตั้งค่าเครือข่าย (IP forward + SNAT)", Work: func() error {
-			setupNetworking(port, proto, ipLine)
+			setupNetworking(port, proto)
 			return nil
 		}},
 		{Label: "เริ่ม OPENVPN", Work: func() error {
@@ -1222,7 +1213,7 @@ func openvpnInstall(r *bufio.Reader, svc service.Service) error {
 // rejects packets because no interface owns that address. MASQUERADE picks
 // the egress interface's source IP automatically.
 // Failures are non-fatal — logged to stderr, installer continues.
-func setupNetworking(port int, proto, serverIP string) {
+func setupNetworking(port int, proto string) {
 	// 1. Enable IP forwarding immediately.
 	_ = os.WriteFile("/proc/sys/net/ipv4/ip_forward", []byte("1\n"), 0o644)
 
@@ -1286,7 +1277,6 @@ func setupNetworking(port int, proto, serverIP string) {
 	if _, err := os.Stat(rclocal); os.IsNotExist(err) {
 		_ = os.WriteFile(rclocal, []byte("#!/bin/sh -e\nexit 0\n"), 0o755)
 	}
-	_ = serverIP // kept for rc.local cleanup logic that may target legacy SNAT lines.
 	rules := []string{
 		"echo 1 > /proc/sys/net/ipv4/ip_forward",
 		"echo 1 > /proc/sys/net/ipv6/conf/all/disable_ipv6",
@@ -1416,24 +1406,33 @@ func cleanupOpenVPN() {
 		fmt.Println(cYelBold + "  - iptables MASQUERADE 10.8.0.0/16" + cReset)
 	}
 
-	// Read any legacy SNAT --to <IP> line from rc.local and tear it down too.
-	legacyIP := ""
+	// Read any legacy SNAT --to <IP> lines from rc.local and tear each one
+	// down. Repeated installs with a changing public IP accumulate multiple
+	// SNAT lines; the previous loop overwrote a single legacyIP and left
+	// every earlier rule live in the kernel until reboot.
+	var legacyIPs []string
+	seen := map[string]bool{}
 	if raw, err := os.ReadFile(rclocal); err == nil {
 		for _, line := range strings.Split(string(raw), "\n") {
-			if strings.Contains(line, "-j SNAT --to ") {
-				parts := strings.Fields(line)
-				for i, p := range parts {
-					if p == "--to" && i+1 < len(parts) {
-						legacyIP = parts[i+1]
+			if !strings.Contains(line, "-j SNAT --to ") {
+				continue
+			}
+			parts := strings.Fields(line)
+			for i, p := range parts {
+				if p == "--to" && i+1 < len(parts) {
+					ip := parts[i+1]
+					if !seen[ip] {
+						seen[ip] = true
+						legacyIPs = append(legacyIPs, ip)
 					}
 				}
 			}
 		}
 	}
-	if legacyIP != "" {
+	for _, ip := range legacyIPs {
 		exec.Command("iptables", "-t", "nat", "-D", "POSTROUTING",
-			"-s", "10.8.0.0/16", "-j", "SNAT", "--to", legacyIP).Run()
-		fmt.Println(cYelBold + "  - iptables SNAT 10.8.0.0/16 → " + legacyIP + " (legacy)" + cReset)
+			"-s", "10.8.0.0/16", "-j", "SNAT", "--to", ip).Run()
+		fmt.Println(cYelBold + "  - iptables SNAT 10.8.0.0/16 → " + ip + " (legacy)" + cReset)
 	}
 
 	// Clean rc.local: remove every line that setupNetworking injected

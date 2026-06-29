@@ -538,39 +538,29 @@ func runEnableRoot(r *bufio.Reader) error {
 
 	lines := strings.Split(string(data), "\n")
 	replaced := false
+	inMatch := false
 	for i, line := range lines {
-		trimmed := strings.TrimLeft(line, " \t#")
-		fields := strings.Fields(trimmed)
+		if isSSHMatchOpener(line) {
+			inMatch = true
+			continue
+		}
+		if inMatch {
+			// Leave in-Match PermitRootLogin scoping alone; the global
+			// directive still has to be inserted outside the block, so
+			// don't flip 'replaced' on an in-Match hit.
+			continue
+		}
+		bare := strings.TrimLeft(line, " \t#")
+		fields := strings.Fields(bare)
 		if len(fields) >= 1 && fields[0] == "PermitRootLogin" {
 			lines[i] = "PermitRootLogin yes"
 			replaced = true
 		}
 	}
 	if !replaced {
-		// Insert BEFORE the first Match block — global directives that
-		// fall inside a Match scope are rejected by sshd at startup.
-		insertAt := -1
-		for i, line := range lines {
-			if strings.HasPrefix(strings.TrimSpace(line), "Match ") {
-				insertAt = i
-				break
-			}
-		}
-		if insertAt < 0 {
-			// No Match block — append cleanly, preserving trailing newline.
-			if len(lines) > 0 && lines[len(lines)-1] == "" {
-				lines[len(lines)-1] = "PermitRootLogin yes"
-				lines = append(lines, "")
-			} else {
-				lines = append(lines, "PermitRootLogin yes")
-			}
-		} else {
-			merged := make([]string, 0, len(lines)+1)
-			merged = append(merged, lines[:insertAt]...)
-			merged = append(merged, "PermitRootLogin yes")
-			merged = append(merged, lines[insertAt:]...)
-			lines = merged
-		}
+		// Insert BEFORE the first Match block via the shared helper, which
+		// also preserves the trailing newline.
+		lines = insertBeforeFirstMatch(lines, "PermitRootLogin yes")
 	}
 	if err := os.WriteFile(sshdConfigPath, []byte(strings.Join(lines, "\n")), 0o644); err != nil {
 		return fmt.Errorf("เขียน %s: %w", sshdConfigPath, err)

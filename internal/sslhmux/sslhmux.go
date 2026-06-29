@@ -174,11 +174,17 @@ func handleMuxConn(conn net.Conn, cfg Config) {
 	peek := make([]byte, 8)
 	n, err := io.ReadFull(conn, peek)
 	_ = conn.SetReadDeadline(time.Time{})
-	// n==0 means no bytes at all; other errors besides ErrUnexpectedEOF are fatal.
-	if n == 0 || (err != nil && err != io.ErrUnexpectedEOF) {
+	// Detect on whatever we got, even on partial reads: a slow mobile client
+	// that delivers the first 3-7 bytes of "SSH-2.0-..." inside peekTimeout
+	// then stalls returns n>0 with err=os.ErrDeadlineExceeded (not
+	// ErrUnexpectedEOF) — previously we closed those legitimate clients.
+	// Only bail when we got zero bytes; with any bytes in hand, try to
+	// detect and route.
+	if n == 0 {
 		conn.Close()
 		return
 	}
+	_ = err // err is non-nil on short read or deadline; bytes we have are still usable.
 	peek = peek[:n]
 
 	target := detect(peek, cfg)

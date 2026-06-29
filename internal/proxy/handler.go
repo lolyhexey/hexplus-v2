@@ -172,11 +172,16 @@ func (h *Handler) handleConn(client net.Conn) {
 	// but compare on the host half of "host:port" with an exact match —
 	// not a prefix — so "127.0.0.1.evil.com:22" can't slip through.
 	// DefaultHost is operator-set so it's always trusted.
+	//
+	// Bare hostnames without a port (e.g. "127.0.0.1") are accepted at the
+	// allowlist stage by falling back to the raw value as the host; the
+	// dial below will reject them with 502 if no port can be inferred.
+	// v1 prefix-match accepted these, so 403'ing them here would be a
+	// behavioral regression for injector apps that send bare hosts.
 	if fromClient {
 		host, _, splitErr := net.SplitHostPort(hostPort)
 		if splitErr != nil {
-			_, _ = client.Write([]byte("HTTP/1.1 403 Forbidden!\r\n\r\n"))
-			return
+			host = hostPort
 		}
 		if !allowedHosts[strings.ToLower(host)] {
 			_, _ = client.Write([]byte("HTTP/1.1 403 Forbidden!\r\n\r\n"))

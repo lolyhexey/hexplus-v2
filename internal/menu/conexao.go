@@ -19,6 +19,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -366,17 +367,11 @@ func sshAddPort(r *bufio.Reader, current []int) error {
 		portLine = "Port 22\n" + portLine
 	}
 	// Insert BEFORE any Match block — appending after Match puts the Port
-	// directive inside the block, which sshd rejects at startup.
-	conf := string(data)
-	matchIdx := strings.Index(conf, "\nMatch ")
-	var newConf string
-	if matchIdx >= 0 {
-		newConf = strings.TrimRight(conf[:matchIdx], "\n") +
-			"\n" + portLine + "\n" +
-			conf[matchIdx+1:]
-	} else {
-		newConf = strings.TrimRight(conf, "\n") + "\n" + portLine + "\n"
-	}
+	// directive inside the block, which sshd rejects at startup. The helper
+	// handles both the no-Match and Match-at-byte-0 edge cases.
+	lines := strings.Split(string(data), "\n")
+	lines = insertBeforeFirstMatch(lines, portLine)
+	newConf := strings.Join(lines, "\n")
 	if err := os.WriteFile("/etc/ssh/sshd_config", []byte(newConf), 0o644); err != nil {
 		return fmt.Errorf("เขียน sshd_config ไม่ได้: %w", err)
 	}
@@ -516,7 +511,7 @@ func ensureSSHMatchBlock(conf string, alreadyChanged bool) (string, bool) {
 		}
 		if skipUntilNextMatch {
 			// A new "Match" keyword ends the block we're skipping.
-			if strings.HasPrefix(trimmed, "Match ") {
+			if isSSHMatchOpener(line) {
 				skipUntilNextMatch = false
 			} else {
 				continue
@@ -582,22 +577,67 @@ func ensureFalseShell() {
 	_, _ = f.WriteString("/bin/false\n")
 }
 
-// ensureSSHDirective guarantees that exactly one line "key val" exists in
-// the sshd_config text. Removes commented variants and duplicates.
+// isSSHMatchOpener reports whether a sshd_config line opens a Match block.
+// sshd's lexer treats space, tab, CR and newline as whitespace between the
+// keyword and its criteria, so we accept any of them — `Match User foo`,
+// `Match\tUser foo`, etc.
+func isSSHMatchOpener(line string) bool {
+	fields := strings.Fields(line)
+	return len(fields) > 0 && fields[0] == "Match"
+}
+
+// insertBeforeFirstMatch inserts item just before the first sshd Match
+// directive in lines, or appends item if no Match block exists. Used by
+// every callsite that needs to add a GLOBAL sshd directive: anything placed
+// after a Match opener is scoped to that block (and sshd refuses to load
+// directives like UsePAM that aren't Match-allowed).
+//
+// When inserting at the end, an "" trailing sentinel left by strings.Split
+// of a newline-terminated file is preserved by inserting BEFORE it — so
+// the joined output keeps exactly one trailing newline instead of gaining
+// a blank line and losing the terminator.
+func insertBeforeFirstMatch(lines []string, item string) []string {
+	for i, line := range lines {
+		if isSSHMatchOpener(line) {
+			return slices.Insert(lines, i, item)
+		}
+	}
+	if len(lines) > 0 && lines[len(lines)-1] == "" {
+		return slices.Insert(lines, len(lines)-1, item)
+	}
+	return append(lines, item)
+}
+
+// ensureSSHDirective guarantees that exactly one GLOBAL line "key val" exists
+// in the sshd_config text outside any Match block. Commented variants and
+// duplicates outside Match are stripped; lines inside Match blocks are left
+// untouched — operators may have scoped overrides there on purpose, and
+// counting an in-Match line as "found" would skip inserting the global one
+// (the actual bug we hit before this rewrite).
 //
 // When the directive needs to be inserted, it lands BEFORE the first Match
-// block: directives that fall inside a Match block are scoped to it and
-// sshd refuses to start when global keywords (Port, PasswordAuthentication)
-// appear inside Match.
+// block.
 func ensureSSHDirective(conf, key, val string, alreadyChanged bool) (string, bool) {
 	want := key + " " + val
 	var kept []string
 	found := false
 	changed := alreadyChanged
+	inMatch := false
 	for _, line := range strings.Split(conf, "\n") {
-		bare := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(line), "#"))
+		trimmed := strings.TrimSpace(line)
+		if isSSHMatchOpener(line) {
+			inMatch = true
+			kept = append(kept, line)
+			continue
+		}
+		if inMatch {
+			// Preserve everything verbatim once inside a Match block.
+			kept = append(kept, line)
+			continue
+		}
+		bare := strings.TrimSpace(strings.TrimPrefix(trimmed, "#"))
 		if strings.HasPrefix(bare, key+" ") || bare == key {
-			if strings.TrimSpace(line) == want && !found {
+			if trimmed == want && !found {
 				kept = append(kept, line)
 				found = true
 			} else {
@@ -608,22 +648,7 @@ func ensureSSHDirective(conf, key, val string, alreadyChanged bool) (string, boo
 		kept = append(kept, line)
 	}
 	if !found {
-		insertAt := -1
-		for i, line := range kept {
-			if strings.HasPrefix(strings.TrimSpace(line), "Match ") {
-				insertAt = i
-				break
-			}
-		}
-		if insertAt < 0 {
-			kept = append(kept, want)
-		} else {
-			merged := make([]string, 0, len(kept)+1)
-			merged = append(merged, kept[:insertAt]...)
-			merged = append(merged, want)
-			merged = append(merged, kept[insertAt:]...)
-			kept = merged
-		}
+		kept = insertBeforeFirstMatch(kept, want)
 		changed = true
 	}
 	return strings.Join(kept, "\n"), changed
@@ -986,6 +1011,13 @@ func writeDropbearPortDropIn(port int) error {
 	dir := filepath.Join(service.SystemdUnitDir, "hexplus-dropbear.service.d")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("mkdir %s: %w", dir, err)
+	}
+	// The drop-in pins ReadWritePaths=/etc/dropbear; systemd refuses to
+	// start the unit if that path doesn't exist (Failed to set up mount
+	// namespacing). dropbearInstall pre-creates it, but a bare port change
+	// after the directory was wiped would silently fail the next restart.
+	if err := os.MkdirAll("/etc/dropbear", 0o700); err != nil {
+		return fmt.Errorf("mkdir /etc/dropbear: %w", err)
 	}
 	// v1 always adds port 110 as extra (DROPBEAR_EXTRA_ARGS="-p 110").
 	extra := " -p 110"
