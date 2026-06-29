@@ -199,7 +199,10 @@ func squidMenu(r *bufio.Reader, svc service.Service) error {
 				waitEnter(r)
 			}
 		case "4", "04":
-			if err := service.Restart(svc); err != nil {
+			fmt.Println()
+			if err := progress.Run([]progress.Step{
+				{Label: "รีสตาร์ท SQUID", Work: func() error { return service.Restart(svc) }},
+			}); err != nil {
 				fmt.Println("\n" + cRedBold + "[ผิดพลาด] " + cYelBold + err.Error() + cReset)
 			} else {
 				fmt.Println("\n" + cGrnBold + "รีสตาร์ท SQUID สำเร็จ" + cReset)
@@ -590,7 +593,10 @@ func dropbearMenu(r *bufio.Reader, svc service.Service) error {
 			waitEnter(r)
 			return nil
 		case "3", "03":
-			if err := service.Restart(svc); err != nil {
+			fmt.Println()
+			if err := progress.Run([]progress.Step{
+				{Label: "รีสตาร์ท DROPBEAR", Work: func() error { return service.Restart(svc) }},
+			}); err != nil {
 				fmt.Println("\n" + cRedBold + "[ผิดพลาด] " + cYelBold + err.Error() + cReset)
 			} else {
 				fmt.Println("\n" + cGrnBold + "รีสตาร์ท DROPBEAR สำเร็จ" + cReset)
@@ -832,7 +838,10 @@ func openvpnMenu(r *bufio.Reader, svc service.Service) error {
 				waitEnter(r)
 			}
 		case "6", "06":
-			if err := service.Restart(svc); err != nil {
+			fmt.Println()
+			if err := progress.Run([]progress.Step{
+				{Label: "รีสตาร์ท OPENVPN", Work: func() error { return service.Restart(svc) }},
+			}); err != nil {
 				fmt.Println("\n" + cRedBold + "[ผิดพลาด] " + cYelBold + err.Error() + cReset)
 			} else {
 				fmt.Println("\n" + cGrnBold + "รีสตาร์ท OPENVPN สำเร็จ" + cReset)
