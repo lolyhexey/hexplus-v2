@@ -70,7 +70,7 @@ func runMainPage2(r *bufio.Reader) error {
 //
 // Pacing rule: handlers that print results and return normally do NOT
 // waitEnter themselves; the wait happens here via handleWithWait. Stub
-// handlers (21/22/31) call notImplemented which already waits internally,
+// handlers (21/22) call notImplemented which already waits internally,
 // so we route them through plain calls without an extra wait.
 func dispatchPage2(choice string, r *bufio.Reader) (bool, error) {
 	switch choice {
@@ -118,8 +118,7 @@ func dispatchPage2(choice string, r *bufio.Reader) (bool, error) {
 	case "30":
 		return false, handleWithWait(r, runEnableRoot)
 	case "31":
-		// Stub — notImplemented already waits.
-		return false, runSetSpeed(r)
+		return false, handleWithWait(r, runSetSpeed)
 	case "32":
 		return false, handleWithWait(r, runTimeReboot)
 
@@ -521,10 +520,14 @@ func runUninstall(r *bufio.Reader) error {
 	return nil
 }
 
-// runEnableRoot (30 changeroot): flip PermitRootLogin to yes in sshd_config
-// and restart the SSH unit. We rewrite all matches (commented or not) and
-// append a line only when none existed, so we don't accumulate duplicate
-// directives across repeated invocations.
+// runEnableRoot (30 changeroot): turn on the two sshd_config directives
+// root password login needs (PermitRootLogin yes + PasswordAuthentication
+// yes — without the second one, sshd rejects root password attempts even
+// when PermitRootLogin is yes), restart the daemon, then optionally let
+// the operator set a fresh root password in the same flow. v1 customers
+// hit "30" specifically to fix "root login refused" on fresh VPSes, and
+// those refusals are almost always one of those two flags + an unset root
+// password — combining them in one menu action saves a round-trip.
 func runEnableRoot(r *bufio.Reader) error {
 	if err := requireRoot(); err != nil {
 		return err
@@ -535,79 +538,230 @@ func runEnableRoot(r *bufio.Reader) error {
 	if err != nil {
 		return fmt.Errorf("อ่าน %s: %w", sshdConfigPath, err)
 	}
-
-	lines := strings.Split(string(data), "\n")
-	replaced := false
-	inMatch := false
-	for i, line := range lines {
-		if isSSHMatchOpener(line) {
-			inMatch = true
-			continue
+	conf := string(data)
+	changed := false
+	conf, changed = ensureSSHDirective(conf, "PermitRootLogin", "yes", changed)
+	conf, changed = ensureSSHDirective(conf, "PasswordAuthentication", "yes", changed)
+	if changed {
+		if err := os.WriteFile(sshdConfigPath, []byte(conf), 0o644); err != nil {
+			return fmt.Errorf("เขียน %s: %w", sshdConfigPath, err)
 		}
-		if inMatch {
-			// Leave in-Match PermitRootLogin scoping alone; the global
-			// directive still has to be inserted outside the block, so
-			// don't flip 'replaced' on an in-Match hit.
-			continue
-		}
-		bare := strings.TrimLeft(line, " \t#")
-		fields := strings.Fields(bare)
-		if len(fields) >= 1 && fields[0] == "PermitRootLogin" {
-			lines[i] = "PermitRootLogin yes"
-			replaced = true
-		}
-	}
-	if !replaced {
-		// Insert BEFORE the first Match block via the shared helper, which
-		// also preserves the trailing newline.
-		lines = insertBeforeFirstMatch(lines, "PermitRootLogin yes")
-	}
-	if err := os.WriteFile(sshdConfigPath, []byte(strings.Join(lines, "\n")), 0o644); err != nil {
-		return fmt.Errorf("เขียน %s: %w", sshdConfigPath, err)
 	}
 
-	// Try "ssh" first (Debian/Ubuntu unit), fall back to "sshd" (RHEL).
-	if err := exec.Command("systemctl", "restart", "ssh").Run(); err != nil {
-		if err := exec.Command("systemctl", "restart", "sshd").Run(); err != nil {
-			fmt.Println(cYelBold + "อัปเดต sshd_config สำเร็จ แต่รีสตาร์ทบริการล้มเหลว — กรุณารัน 'systemctl restart sshd' ด้วยตนเอง" + cReset)
-			return nil
-		}
+	// Try "ssh" first (Debian/Ubuntu unit), fall back to "sshd" (RHEL/Alma).
+	restarted := exec.Command("systemctl", "restart", "ssh").Run() == nil ||
+		exec.Command("systemctl", "restart", "sshd").Run() == nil
+	if !restarted {
+		fmt.Println(cYelBold + "อัปเดต sshd_config สำเร็จ แต่รีสตาร์ทบริการล้มเหลว — รัน 'systemctl restart sshd' ด้วยตนเอง" + cReset)
+	} else {
+		fmt.Println(cGrnBold + "เปิด PermitRootLogin + PasswordAuthentication และรีสตาร์ท sshd สำเร็จ" + cReset)
 	}
-	fmt.Println(cGrnBold + "เปิดผู้ใช้รูทผ่าน SSH สำเร็จ" + cReset)
+
+	fmt.Println()
+	fmt.Print(cYelBold + "ตั้งรหัสผ่าน root ใหม่ตอนนี้เลย? [y/N]: " + cReset)
+	ans, _ := r.ReadString('\n')
+	if !strings.EqualFold(strings.TrimSpace(ans), "y") {
+		return nil
+	}
+	fmt.Print(cYelBold + "รหัสผ่าน root ใหม่: " + cReset)
+	pwLine, err := r.ReadString('\n')
+	if err != nil {
+		return err
+	}
+	pw := strings.TrimRight(pwLine, "\r\n")
+	if pw == "" {
+		return errors.New("รหัสผ่านว่างเปล่า")
+	}
+	cmd := exec.Command("chpasswd")
+	cmd.Stdin = strings.NewReader("root:" + pw + "\n")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("chpasswd: %w: %s", err, strings.TrimSpace(string(out)))
+	}
+	fmt.Println(cGrnBold + "ตั้งรหัสผ่าน root สำเร็จ" + cReset)
 	return nil
 }
 
-// runSetSpeed (31 stub): v1 used ethtool to negotiate link speed; we can't
-// ship ethtool from a single-binary, so this stays a stub until we wrap
-// the ethtool ioctls in Go.
-// TODO(v2.x): wrap SIOCETHTOOL ioctls so we don't depend on ethtool(8).
+// runSetSpeed (31): driver-link speed config via `ethtool`. On VPS boxes
+// the NIC is almost always a virtualised driver (virtio_net, ena, vmxnet3)
+// where the host hypervisor caps the rate and the guest's ethtool -s call
+// is a no-op or returns EOPNOTSUPP — we surface that as a clear note so
+// operators don't think hexplus broke their link. On bare metal it works
+// the same way as v1's `ethtool -s eth0 speed N duplex full autoneg off`.
 func runSetSpeed(r *bufio.Reader) error {
-	return notImplemented(r, "31 ตั้งความเร็วอินเทอร์เน็ต")
+	if err := requireRoot(); err != nil {
+		return err
+	}
+	clearScreen()
+
+	iface := defaultIface()
+	if iface == "" {
+		return errors.New("หา interface เริ่มต้นไม่เจอ — ตรวจสอบ /proc/net/route")
+	}
+	if _, err := exec.LookPath("ethtool"); err != nil {
+		fmt.Println(cRedBold + "ไม่พบ ethtool ในระบบ" + cReset)
+		fmt.Println(cYelBold + "ติดตั้งด้วย: " + cWhtBold + "apt install ethtool" + cYelBold + " (หรือ yum/dnf install ethtool)" + cReset)
+		return nil
+	}
+
+	current := ""
+	if data, err := os.ReadFile("/sys/class/net/" + iface + "/speed"); err == nil {
+		current = strings.TrimSpace(string(data)) + " Mbps"
+	}
+	fmt.Printf("%sอินเทอร์เฟส%s: %s%s%s\n", cYelBold, cWhtBold, cGrnBold, iface, cReset)
+	if current != "" {
+		fmt.Printf("%sความเร็วปัจจุบัน%s: %s%s%s\n", cYelBold, cWhtBold, cGrnBold, current, cReset)
+	}
+	fmt.Println()
+	fmt.Println(cGrnBold + "เลือกความเร็ว:" + cReset)
+	fmt.Println(cRedBold + "[" + cCyanBold + "1" + cRedBold + "] " + cYelBold + "Auto-negotiate (แนะนำ)" + cReset)
+	fmt.Println(cRedBold + "[" + cCyanBold + "2" + cRedBold + "] " + cYelBold + "100 Mbps" + cReset)
+	fmt.Println(cRedBold + "[" + cCyanBold + "3" + cRedBold + "] " + cYelBold + "1 Gbps" + cReset)
+	fmt.Println(cRedBold + "[" + cCyanBold + "4" + cRedBold + "] " + cYelBold + "10 Gbps" + cReset)
+	fmt.Println()
+	fmt.Print(cGrnBold + "เลือก [1-4] (default: 1): " + cReset)
+	line, _ := r.ReadString('\n')
+	choice := strings.TrimSpace(line)
+	if choice == "" {
+		choice = "1"
+	}
+
+	var args []string
+	var label string
+	switch choice {
+	case "1":
+		args = []string{"-s", iface, "autoneg", "on"}
+		label = "Auto-negotiate"
+	case "2":
+		args = []string{"-s", iface, "speed", "100", "duplex", "full", "autoneg", "off"}
+		label = "100 Mbps"
+	case "3":
+		args = []string{"-s", iface, "speed", "1000", "duplex", "full", "autoneg", "off"}
+		label = "1 Gbps"
+	case "4":
+		args = []string{"-s", iface, "speed", "10000", "duplex", "full", "autoneg", "off"}
+		label = "10 Gbps"
+	default:
+		return errors.New("ตัวเลือกไม่ถูกต้อง")
+	}
+
+	out, err := exec.Command("ethtool", args...).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("ethtool ผิดพลาด — VPS virtualized NIC มักไม่รองรับการเปลี่ยนความเร็ว: %w: %s",
+			err, strings.TrimSpace(string(out)))
+	}
+	newSpeed := ""
+	if data, err := os.ReadFile("/sys/class/net/" + iface + "/speed"); err == nil {
+		newSpeed = strings.TrimSpace(string(data)) + " Mbps"
+	}
+	fmt.Printf("\n%sตั้งความเร็วเป็น %s สำเร็จ%s\n", cGrnBold, label, cReset)
+	if newSpeed != "" {
+		fmt.Printf("%sความเร็วใหม่%s: %s%s%s\n", cYelBold, cWhtBold, cGrnBold, newSpeed, cReset)
+	}
+	return nil
 }
 
-// runTimeReboot (32): drop a cron.d entry to reboot every N hours.
-// We rewrite the whole file each time so adjusting N doesn't duplicate
-// schedules.
+// runTimeReboot (32): write /etc/cron.d/hexplus-reboot. Four modes —
+// every N hours, daily HH:MM, weekly DOW HH:MM, or disabled — covering
+// the schedules sellers actually configure. v1's single "ทุก N ชั่วโมง"
+// prompt was the most common complaint because operators on shared
+// daytime peaks wanted a fixed reboot at 04:00 instead of "every 8h"
+// drifting through business hours.
 func runTimeReboot(r *bufio.Reader) error {
 	if err := requireRoot(); err != nil {
 		return err
 	}
 	clearScreen()
-	fmt.Print(cYelBold + "ตั้งเวลารีบูตทุก N ชั่วโมง (1-24): " + cReset)
-	line, err := r.ReadString('\n')
-	if err != nil {
-		return err
+
+	if data, err := os.ReadFile(timeRebootCron); err == nil {
+		fmt.Println(cYelBold + "ตั้งค่าปัจจุบัน:" + cReset)
+		for _, ln := range strings.Split(string(data), "\n") {
+			t := strings.TrimSpace(ln)
+			if t == "" || strings.HasPrefix(t, "SHELL=") || strings.HasPrefix(t, "PATH=") || strings.HasPrefix(t, "#") {
+				continue
+			}
+			fmt.Printf("  %s%s%s\n", cWhtBold, t, cReset)
+		}
+	} else {
+		fmt.Println(cYelBold + "ยังไม่มีการตั้งเวลารีบูตอัตโนมัติ" + cReset)
 	}
-	n, err := strconv.Atoi(strings.TrimSpace(line))
-	if err != nil || n < 1 || n > 24 {
-		return errors.New("ต้องเป็นตัวเลข 1-24")
+	fmt.Println()
+
+	fmt.Println(cGrnBold + "ตั้งค่ารีบูตอัตโนมัติ:" + cReset)
+	fmt.Println(cRedBold + "[" + cCyanBold + "1" + cRedBold + "] " + cYelBold + "ทุก N ชั่วโมง" + cReset)
+	fmt.Println(cRedBold + "[" + cCyanBold + "2" + cRedBold + "] " + cYelBold + "ทุกวัน เวลา HH:MM" + cReset)
+	fmt.Println(cRedBold + "[" + cCyanBold + "3" + cRedBold + "] " + cYelBold + "ทุกสัปดาห์ วันใด เวลา HH:MM" + cReset)
+	fmt.Println(cRedBold + "[" + cCyanBold + "4" + cRedBold + "] " + cYelBold + "ปิดการรีบูตอัตโนมัติ" + cReset)
+	fmt.Println()
+	fmt.Print(cGrnBold + "เลือก: " + cReset)
+	line, _ := r.ReadString('\n')
+	choice := strings.TrimSpace(line)
+
+	const header = "SHELL=/bin/sh\nPATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin\n"
+	const cmd = "root /sbin/shutdown -r now"
+	var cronLine, label string
+
+	switch choice {
+	case "1":
+		fmt.Print(cYelBold + "ทุก N ชั่วโมง (1-24): " + cReset)
+		ln, _ := r.ReadString('\n')
+		n, err := strconv.Atoi(strings.TrimSpace(ln))
+		if err != nil || n < 1 || n > 24 {
+			return errors.New("ต้องเป็นตัวเลข 1-24")
+		}
+		cronLine = fmt.Sprintf("0 */%d * * * %s\n", n, cmd)
+		label = fmt.Sprintf("ทุก %d ชั่วโมง", n)
+	case "2":
+		fmt.Print(cYelBold + "เวลา (HH:MM, 24-ชั่วโมง): " + cReset)
+		ln, _ := r.ReadString('\n')
+		hh, mm, err := parseHHMM(strings.TrimSpace(ln))
+		if err != nil {
+			return err
+		}
+		cronLine = fmt.Sprintf("%d %d * * * %s\n", mm, hh, cmd)
+		label = fmt.Sprintf("ทุกวันเวลา %02d:%02d", hh, mm)
+	case "3":
+		fmt.Print(cYelBold + "วัน (0=อาทิตย์ ... 6=เสาร์): " + cReset)
+		dowLn, _ := r.ReadString('\n')
+		dow, err := strconv.Atoi(strings.TrimSpace(dowLn))
+		if err != nil || dow < 0 || dow > 6 {
+			return errors.New("วันต้องเป็น 0-6")
+		}
+		fmt.Print(cYelBold + "เวลา (HH:MM): " + cReset)
+		ln, _ := r.ReadString('\n')
+		hh, mm, err := parseHHMM(strings.TrimSpace(ln))
+		if err != nil {
+			return err
+		}
+		dowNames := []string{"อาทิตย์", "จันทร์", "อังคาร", "พุธ", "พฤหัสบดี", "ศุกร์", "เสาร์"}
+		cronLine = fmt.Sprintf("%d %d * * %d %s\n", mm, hh, dow, cmd)
+		label = fmt.Sprintf("ทุกวัน%s เวลา %02d:%02d", dowNames[dow], hh, mm)
+	case "4":
+		if err := os.Remove(timeRebootCron); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("ลบ %s: %w", timeRebootCron, err)
+		}
+		fmt.Println(cGrnBold + "ปิดการรีบูตอัตโนมัติแล้ว" + cReset)
+		return nil
+	default:
+		return errors.New("ตัวเลือกไม่ถูกต้อง")
 	}
 
-	// /etc/cron.d entries require user field. 0 minute every N hours.
-	body := fmt.Sprintf("SHELL=/bin/sh\nPATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin\n0 */%d * * * root /sbin/shutdown -r now\n", n)
-	if err := os.WriteFile(timeRebootCron, []byte(body), 0o644); err != nil {
+	if err := os.WriteFile(timeRebootCron, []byte(header+cronLine), 0o644); err != nil {
 		return fmt.Errorf("เขียน %s: %w", timeRebootCron, err)
 	}
-	fmt.Printf("%sตั้งเวลารีบูตทุก %d ชั่วโมง สำเร็จ%s\n", cGrnBold, n, cReset)
+	fmt.Printf("%sตั้งเวลารีบูต %s สำเร็จ%s\n", cGrnBold, label, cReset)
 	return nil
+}
+
+// parseHHMM accepts "HH:MM" (24-hour). Padding is forgiving — "4:5" works.
+func parseHHMM(s string) (int, int, error) {
+	parts := strings.Split(s, ":")
+	if len(parts) != 2 {
+		return 0, 0, errors.New("รูปแบบเวลาต้องเป็น HH:MM (เช่น 04:30)")
+	}
+	hh, e1 := strconv.Atoi(strings.TrimSpace(parts[0]))
+	mm, e2 := strconv.Atoi(strings.TrimSpace(parts[1]))
+	if e1 != nil || e2 != nil || hh < 0 || hh > 23 || mm < 0 || mm > 59 {
+		return 0, 0, errors.New("ชั่วโมงต้อง 0-23, นาทีต้อง 0-59")
+	}
+	return hh, mm, nil
 }
