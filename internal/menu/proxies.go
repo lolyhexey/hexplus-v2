@@ -94,7 +94,7 @@ var proxyCodePresets = []struct {
 }{
 	{"1", "200", `Connection established`, "200 Connection established (แนะนำ — สำหรับ SOCKS SSH)"},
 	{"2", "101", `<font color="null">HEXPLUS</font>`, "101 Switching Protocols"},
-	{"3", "400", `<font color="null">HEXPLUS</font>\r\nContent-length: 0`, "400 Bad Request spoof + Content-length"},
+	{"3", "400", `Bad Request`, "400 Bad Request"},
 	{"4", "520", `<font color="null">HEXPLUS</font>\r\nContent-length: 0`, "520 Cloudflare error spoof + Content-length"},
 }
 
