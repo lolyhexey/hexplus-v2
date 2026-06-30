@@ -105,7 +105,6 @@ func paintConexaoHeader() {
 	for _, pair := range []struct{ label, key string }{
 		{"OPENVPN", "openvpn"},
 		{"DROPBEAR", "dropbear"},
-		{"SQUID PROXY", "squid"},
 	} {
 		svc, ok := service.ByName(pair.key)
 		if !ok {
@@ -121,6 +120,17 @@ func paintConexaoHeader() {
 		}
 		fmt.Printf("%sบริการ: %s%s %sพอร์ต: %s%d%s\n",
 			cWhtBold, cYelBold, pair.label, cWhtBold, cCyanBold, port, cReset)
+	}
+	// SQUID PROXY: squid.conf can declare multiple http_port lines (the menu
+	// supports add-port/remove-port), so read every one instead of the single
+	// readPersistedPort value the unit-side falls back to.
+	if svc, ok := service.ByName("squid"); ok {
+		if st, _ := service.Status(svc); st.ActiveState == "active" {
+			if ports := readSquidPorts(); len(ports) > 0 {
+				fmt.Printf("%sบริการ: %sSQUID PROXY %sพอร์ต: %s%s%s\n",
+					cWhtBold, cYelBold, cWhtBold, cCyanBold, strings.Join(ports, " "), cReset)
+			}
+		}
 	}
 	// SSL TUNNEL: port comes from the JSON config, not service.Service.
 	if exec.Command("systemctl", "is-active", "--quiet", ssltunnel.UnitName).Run() == nil {
