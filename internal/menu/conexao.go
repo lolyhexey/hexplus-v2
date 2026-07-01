@@ -25,6 +25,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/lolyhexey/hexplus/internal/ovpninstance"
 	"github.com/lolyhexey/hexplus/internal/proxy"
 	"github.com/lolyhexey/hexplus/internal/service"
 	"github.com/lolyhexey/hexplus/internal/sslhmux"
@@ -118,8 +119,18 @@ func paintConexaoHeader() {
 		if port == 0 {
 			port = svc.Port
 		}
-		fmt.Printf("%sบริการ: %s%s %sพอร์ต: %s%d%s\n",
-			cWhtBold, cYelBold, pair.label, cWhtBold, cCyanBold, port, cReset)
+		portStr := strconv.Itoa(port)
+		if pair.key == "openvpn" {
+			// Append every extra-instance port that's actively running.
+			insts, _ := ovpninstance.List()
+			for _, inst := range insts {
+				if ist, _ := service.Status(inst.Service()); ist.ActiveState == "active" {
+					portStr += " " + strconv.Itoa(inst.Port)
+				}
+			}
+		}
+		fmt.Printf("%sบริการ: %s%s %sพอร์ต: %s%s%s\n",
+			cWhtBold, cYelBold, pair.label, cWhtBold, cCyanBold, portStr, cReset)
 	}
 	// SQUID PROXY: squid.conf can declare multiple http_port lines (the menu
 	// supports add-port/remove-port), so read every one instead of the single
