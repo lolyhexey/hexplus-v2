@@ -18,6 +18,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -552,6 +553,64 @@ func publicIP() string {
 	return strings.TrimSpace(string(data))
 }
 
+// listeningService is one row of the "บริการที่กำลังทำงาน" table:
+// process name + tcp listening port.
+type listeningService struct {
+	name string
+	port int
+}
+
+// listeningServices runs `ss -H -tlnp` and returns each (process, port)
+// pair sorted by port. Falls back to empty slice on error so the section
+// silently disappears on boxes without ss (unlikely on modern Ubuntu).
+// Deduped: same (name, port) only appears once even if multiple sockets
+// share it (e.g. IPv4 + IPv6 listeners).
+func listeningServices() []listeningService {
+	out, err := exec.Command("ss", "-H", "-tlnp").Output()
+	if err != nil {
+		return nil
+	}
+	seen := map[string]bool{}
+	var svcs []listeningService
+	for _, line := range strings.Split(string(out), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 5 {
+			continue
+		}
+		// Local address column: "0.0.0.0:443" or "[::]:443" or "*:443" —
+		// last colon-separated segment is the port.
+		local := fields[3]
+		portIdx := strings.LastIndex(local, ":")
+		if portIdx < 0 {
+			continue
+		}
+		port, err := strconv.Atoi(local[portIdx+1:])
+		if err != nil {
+			continue
+		}
+		// users column: users:(("openvpn",pid=1,fd=6),("openvpn",pid=2,fd=7))
+		// Extract the first quoted name.
+		users := fields[len(fields)-1]
+		start := strings.Index(users, `"`)
+		if start < 0 {
+			continue
+		}
+		end := strings.Index(users[start+1:], `"`)
+		if end < 0 {
+			continue
+		}
+		name := users[start+1 : start+1+end]
+		key := fmt.Sprintf("%s:%d", name, port)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		svcs = append(svcs, listeningService{name: name, port: port})
+	}
+	sort.Slice(svcs, func(i, j int) bool { return svcs[i].port < svcs[j].port })
+	return svcs
+}
+
 // uptimeHuman parses /proc/uptime (seconds since boot) and formats
 // "Xd Yh Zm".
 func uptimeHuman() string {
@@ -603,6 +662,17 @@ func runVPSInfo(r *bufio.Reader) error {
 		fmt.Printf("%s%-16s%s %s%s%s\n",
 			cGrnBold, row.label, cReset,
 			cWhtBold, row.value, cReset)
+	}
+
+	if svcs := listeningServices(); len(svcs) > 0 {
+		fmt.Println()
+		fmt.Printf("%sบริการที่กำลังทำงาน%s\n", cYelBold, cReset)
+		fmt.Println()
+		for _, s := range svcs {
+			fmt.Printf("%sบริการ %s%-16s %sพอร์ต %s%d%s\n",
+				cGrnBold, cWhtBold, s.name,
+				cGrnBold, cWhtBold, s.port, cReset)
+		}
 	}
 
 	printSep()
