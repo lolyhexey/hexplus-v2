@@ -50,16 +50,15 @@ func CollectStats() SysStats {
 }
 
 // countOnlineExpired reuses the same data the users-list page uses
-// (readSSHLogins + readOpenVPNUsers + chageExpiry against systemUsers)
-// so the main-menu header can't disagree with the list — one user
-// online there means at least one online here.
+// (readSSHLogins + readOpenVPNUsers + chageExpiry against systemUsers).
+// `online` counts TOTAL live sessions across all users — matches the
+// "เชื่อมต่อ N" column in the list so a user with 3 concurrent connections
+// contributes 3, not 1. `expired` counts distinct users past their expiry.
 func countOnlineExpired() (online, expired int) {
 	sshOnline := readSSHLogins()
 	ovpnOnline := readOpenVPNUsers()
 	for _, rec := range systemUsers() {
-		if sshOnline[rec.Name] > 0 || ovpnOnline[rec.Name] > 0 {
-			online++
-		}
+		online += sshOnline[rec.Name] + ovpnOnline[rec.Name]
 		exp, daysLeft := chageExpiry(rec.Name)
 		if exp != "never" && exp != "" && daysLeft < 0 {
 			expired++
