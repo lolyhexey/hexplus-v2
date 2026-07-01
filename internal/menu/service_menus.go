@@ -901,7 +901,13 @@ func speedLimitMenu(r *bufio.Reader, svc service.Service) {
 		clearScreen()
 		paintTitleBar("       จำกัดความเร็วต่อ session      ")
 		mbps := speedlimit.Load()
-		fmt.Printf("\n%sพอร์ต%s : %s%d%s\n", cYelBold, cWhtBold, cGrnBold, readOpenVPNPort(svc), cReset)
+		portLine := fmt.Sprintf("%d/%s", readOpenVPNPort(svc), ovpnProto())
+		if insts, _ := ovpninstance.List(); len(insts) > 0 {
+			for _, inst := range insts {
+				portLine += fmt.Sprintf("%s, %s%d/%s", cWhtBold, cGrnBold, inst.Port, inst.Proto)
+			}
+		}
+		fmt.Printf("\n%sพอร์ต%s : %s%s%s\n", cYelBold, cWhtBold, cGrnBold, portLine, cReset)
 		if mbps > 0 {
 			fmt.Printf("%sสถานะ%s : %sเปิด (%d Mbps up + %d Mbps down)%s\n\n",
 				cYelBold, cWhtBold, cGrnBold, mbps, mbps, cReset)
