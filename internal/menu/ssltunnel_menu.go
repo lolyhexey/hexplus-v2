@@ -163,9 +163,9 @@ func sslTunnelInstall(r *bufio.Reader, target string) error {
 func sslTunnelUninstall(r *bufio.Reader) error {
 	clearScreen()
 	paintTitleBar("              ลบ SSL TUNNEL               ")
-	fmt.Print("\n" + cYelBold + "ต้องการลบ SSL TUNNEL หรือไม่ " + cRedBold + "? " + cGrnBold + "[s/n]: " + cReset)
+	fmt.Print("\n" + cYelBold + "ต้องการลบ SSL TUNNEL หรือไม่ " + cRedBold + "? " + cGrnBold + "[y/n]: " + cReset)
 	line, _ := r.ReadString('\n')
-	if strings.TrimSpace(line) != "s" {
+	if !isYes(line) {
 		return nil
 	}
 

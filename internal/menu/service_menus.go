@@ -54,6 +54,18 @@ func paintOptions(opts [][2]string) {
 	}
 }
 
+// isYes reports whether the raw response to a `[y/n]` confirmation counts
+// as yes — accepts `y`, `yes`, `s`, `sí` (v1 Spanish carry-over), and `1`,
+// case-insensitive. Anything else including a bare newline is treated as no
+// so a stray Enter can't accidentally destroy a service.
+func isYes(line string) bool {
+	switch strings.ToLower(strings.TrimSpace(line)) {
+	case "y", "yes", "s", "sí", "1":
+		return true
+	}
+	return false
+}
+
 // promptLineDefault prints "PROMPT [default]: " and returns the user's input,
 // falling back to defaultVal if the user presses Enter without typing.
 func promptLineDefault(r *bufio.Reader, prompt, defaultVal string) (string, error) {
@@ -323,9 +335,9 @@ func squidInstall(r *bufio.Reader, svc service.Service) error {
 func squidUninstall(r *bufio.Reader, svc service.Service) error {
 	clearScreen()
 	paintTitleBar("            ถอนการติดตั้งพร็อกซี่              ")
-	fmt.Print("\n" + cYelBold + "ต้องการลบ SQUID PROXY หรือไม่ " + cRedBold + "? " + cGrnBold + "[s/n]: " + cReset)
+	fmt.Print("\n" + cYelBold + "ต้องการลบ SQUID PROXY หรือไม่ " + cRedBold + "? " + cGrnBold + "[y/n]: " + cReset)
 	line, _ := r.ReadString('\n')
-	if strings.TrimSpace(line) != "s" {
+	if !isYes(line) {
 		return nil
 	}
 
@@ -572,9 +584,9 @@ func dropbearMenu(r *bufio.Reader, svc service.Service) error {
 		case "2", "02":
 			clearScreen()
 			paintTitleBar("              ลบ DROPBEAR               ")
-			fmt.Print("\n" + cYelBold + "ต้องการลบ DROPBEAR หรือไม่ " + cRedBold + "? " + cGrnBold + "[s/n]: " + cReset)
+			fmt.Print("\n" + cYelBold + "ต้องการลบ DROPBEAR หรือไม่ " + cRedBold + "? " + cGrnBold + "[y/n]: " + cReset)
 			conf, _ := r.ReadString('\n')
-			if strings.TrimSpace(conf) != "s" {
+			if !isYes(conf) {
 				continue
 			}
 			clearScreen()
@@ -800,9 +812,9 @@ func openvpnMenu(r *bufio.Reader, svc service.Service) error {
 		case "2", "02":
 			clearScreen()
 			paintTitleBar("             ลบ OPENVPN              ")
-			fmt.Print("\n" + cYelBold + "ต้องการลบ OPENVPN หรือไม่ " + cRedBold + "? " + cGrnBold + "[s/n]: " + cReset)
+			fmt.Print("\n" + cYelBold + "ต้องการลบ OPENVPN หรือไม่ " + cRedBold + "? " + cGrnBold + "[y/n]: " + cReset)
 			confirm, _ := r.ReadString('\n')
-			if strings.TrimSpace(confirm) != "s" {
+			if !isYes(confirm) {
 				continue
 			}
 			clearScreen()

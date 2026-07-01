@@ -33,8 +33,8 @@ func sslhMuxMenu(r *bufio.Reader) error {
 			fmt.Printf("%s[!] พอร์ต 443 จะถูกใช้เป็นค่าเริ่มต้น%s\n\n", cYelBold, cReset)
 			fmt.Printf("%sติดตั้ง SSLH MULTIPLEX?%s\n", cWhtBold, cReset)
 			paintOptions([][2]string{
-				{"s", "ติดตั้ง"},
-				{"n", "ย้อนกลับ"},
+				{"1", "ติดตั้ง"},
+				{"0", "ย้อนกลับ"},
 			})
 			fmt.Println()
 			choice, err := menuPrompt(r)
@@ -42,9 +42,9 @@ func sslhMuxMenu(r *bufio.Reader) error {
 				return err
 			}
 			switch strings.ToLower(strings.TrimSpace(choice)) {
-			case "n", "0", "00":
+			case "0", "00":
 				return nil
-			case "s", "1", "01":
+			case "1", "01":
 				if err := sslhMuxInstall(r); err != nil {
 					fmt.Println(cRedBold + "[ผิดพลาด] " + cYelBold + err.Error() + cReset)
 					waitEnter(r)
@@ -199,9 +199,9 @@ func sslhMuxInstall(r *bufio.Reader) error {
 func sslhMuxUninstall(r *bufio.Reader) error {
 	clearScreen()
 	paintTitleBar("           ลบ SSLH MULTIPLEX              ")
-	fmt.Print("\n" + cYelBold + "ต้องการลบ SSLH MULTIPLEX หรือไม่ " + cRedBold + "? " + cGrnBold + "[s/n]: " + cReset)
+	fmt.Print("\n" + cYelBold + "ต้องการลบ SSLH MULTIPLEX หรือไม่ " + cRedBold + "? " + cGrnBold + "[y/n]: " + cReset)
 	line, _ := r.ReadString('\n')
-	if strings.TrimSpace(line) != "s" {
+	if !isYes(line) {
 		return nil
 	}
 
