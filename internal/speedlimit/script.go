@@ -25,9 +25,18 @@ CONF=/etc/openvpn/hexplus-speedlimit.conf
 DEV="${dev:-tun0}"
 IFB="ifb${DEV#tun}"
 
+# Which config key applies to this OpenVPN instance? The primary uses
+# dynamic 'dev tun' and lands on tun0/tun1; extra instances pin tunN
+# (N = instance id >= 2). Legacy 'mbps=' lines count as 'main'.
+DEVNUM="${DEV#tun}"
+case "$DEVNUM" in
+    ''|0|1) KEY=main ;;
+    *)      KEY="$DEVNUM" ;;
+esac
+
 get_mbps() {
     [ -r "$CONF" ] || return 1
-    v=$(awk -F= '/^mbps=/{print $2; exit}' "$CONF" 2>/dev/null)
+    v=$(awk -F= -v k="$KEY" '$1==k || (k=="main" && $1=="mbps") {print $2; exit}' "$CONF" 2>/dev/null)
     [ -n "$v" ] && [ "$v" -gt 0 ] 2>/dev/null && echo "$v" || return 1
 }
 

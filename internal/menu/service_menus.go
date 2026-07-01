@@ -778,8 +778,12 @@ func openvpnMenu(r *bufio.Reader, svc service.Service) error {
 			multiMark = markerOn()
 		}
 		speedMark := markerOff()
-		if mbps := speedlimit.Load(); mbps > 0 {
-			speedMark = fmt.Sprintf("%s[%s%d Mbps%s]%s", cRedBold, cGrnBold, mbps, cRedBold, cReset)
+		if limits := speedlimit.LoadAll(); len(limits) > 0 {
+			if mbps := limits[speedlimit.MainKey]; mbps > 0 {
+				speedMark = fmt.Sprintf("%s[%s%d Mbps%s]%s", cRedBold, cGrnBold, mbps, cRedBold, cReset)
+			} else {
+				speedMark = markerOn()
+			}
 		}
 
 		paintTitleBar("          จัดการ OPENVPN           ")
@@ -892,30 +896,31 @@ func openvpnMenu(r *bufio.Reader, svc service.Service) error {
 	}
 }
 
-// speedLimitMenu shows the current per-session bandwidth cap and lets the
-// operator set, change, or disable it. Turning it on/off toggles a single
-// learn-address line in server.conf and restarts OpenVPN so new sessions
-// pick up the shaper immediately.
+// speedLimitMenu shows each port's per-session cap and lets the operator
+// set or clear them independently. Every change toggles the learn-address
+// hook as needed and restarts only the affected OpenVPN instance.
 func speedLimitMenu(r *bufio.Reader, svc service.Service) {
 	for {
 		clearScreen()
 		paintTitleBar("       จำกัดความเร็วต่อ session      ")
-		mbps := speedlimit.Load()
-		portLine := fmt.Sprintf("%d/%s", readOpenVPNPort(svc), ovpnProto())
-		if insts, _ := ovpninstance.List(); len(insts) > 0 {
-			for _, inst := range insts {
-				portLine += fmt.Sprintf("%s, %s%d/%s", cWhtBold, cGrnBold, inst.Port, inst.Proto)
-			}
+		limits := speedlimit.LoadAll()
+		insts, _ := ovpninstance.List()
+
+		fmt.Println()
+		paintSpeedRow(fmt.Sprintf("พอร์ตหลัก %d/%s", readOpenVPNPort(svc), ovpnProto()),
+			limits[speedlimit.MainKey])
+		for _, inst := range insts {
+			paintSpeedRow(fmt.Sprintf("#%d พอร์ต %d/%s", inst.ID, inst.Port, inst.Proto),
+				limits[strconv.Itoa(inst.ID)])
 		}
-		fmt.Printf("\n%sพอร์ต%s : %s%s%s\n", cYelBold, cWhtBold, cGrnBold, portLine, cReset)
-		if mbps > 0 {
-			fmt.Printf("%sสถานะ%s : %sเปิด (%d Mbps up + %d Mbps down)%s\n\n",
-				cYelBold, cWhtBold, cGrnBold, mbps, mbps, cReset)
-			fmt.Printf("%s[%s1%s] %s• %sเปลี่ยนความเร็ว%s\n", cRedBold, cCyanBold, cRedBold, cWhtBold, cYelBold, cReset)
-			fmt.Printf("%s[%s2%s] %s• %sปิดการจำกัด%s\n", cRedBold, cCyanBold, cRedBold, cWhtBold, cYelBold, cReset)
-		} else {
-			fmt.Printf("%sสถานะ%s : %sปิด%s\n\n", cYelBold, cWhtBold, cRedBold, cReset)
-			fmt.Printf("%s[%s1%s] %s• %sเปิดการจำกัด%s\n", cRedBold, cCyanBold, cRedBold, cWhtBold, cYelBold, cReset)
+		fmt.Println()
+
+		fmt.Printf("%s[%s1%s] %s• %sตั้งค่าพอร์ตหลัก%s\n", cRedBold, cCyanBold, cRedBold, cWhtBold, cYelBold, cReset)
+		if len(insts) > 0 {
+			fmt.Printf("%s[%s2%s] %s• %sตั้งค่าพอร์ตเพิ่มเติม%s\n", cRedBold, cCyanBold, cRedBold, cWhtBold, cYelBold, cReset)
+		}
+		if len(limits) > 0 {
+			fmt.Printf("%s[%s3%s] %s• %sปิดการจำกัดทั้งหมด%s\n", cRedBold, cCyanBold, cRedBold, cWhtBold, cYelBold, cReset)
 		}
 		fmt.Printf("%s[%s0%s] %s• %sย้อนกลับ%s\n\n", cRedBold, cCyanBold, cRedBold, cWhtBold, cYelBold, cReset)
 
@@ -927,24 +932,56 @@ func speedLimitMenu(r *bufio.Reader, svc service.Service) {
 		case "0", "00":
 			return
 		case "1", "01":
-			if err := speedLimitSet(r, svc); err != nil {
+			if err := speedLimitSetKey(r, speedlimit.MainKey, svc); err != nil {
 				fmt.Println("\n" + cRedBold + "[ผิดพลาด] " + cYelBold + err.Error() + cReset)
 				waitEnter(r)
 			}
 		case "2", "02":
-			if mbps <= 0 {
+			if len(insts) == 0 {
+				fmt.Println("\n" + cRedBold + "กรุณาเลือกให้ถูกต้อง..." + cReset)
+				time.Sleep(2 * time.Second)
 				continue
 			}
-			if err := speedLimitDisable(svc); err != nil {
-				fmt.Println("\n" + cRedBold + "[ผิดพลาด] " + cYelBold + err.Error() + cReset)
-			} else {
-				fmt.Println("\n" + cGrnBold + "ปิดการจำกัดเรียบร้อย" + cReset)
+			if inst, ok := ovpnInstancePick(r, insts, "ตั้งค่า"); ok {
+				if err := speedLimitSetKey(r, strconv.Itoa(inst.ID), inst.Service()); err != nil {
+					fmt.Println("\n" + cRedBold + "[ผิดพลาด] " + cYelBold + err.Error() + cReset)
+					waitEnter(r)
+				}
 			}
+		case "3", "03":
+			if len(limits) == 0 {
+				continue
+			}
+			if err := speedlimit.DisableAll(); err != nil {
+				fmt.Println("\n" + cRedBold + "[ผิดพลาด] " + cYelBold + err.Error() + cReset)
+				waitEnter(r)
+				continue
+			}
+			fmt.Println()
+			_ = progress.Run([]progress.Step{
+				{Label: "รีสตาร์ท OPENVPN ทุกพอร์ต", Work: func() error {
+					err := service.Restart(svc)
+					for _, inst := range insts {
+						_ = service.Restart(inst.Service())
+					}
+					return err
+				}},
+			})
+			fmt.Println("\n" + cGrnBold + "ปิดการจำกัดทั้งหมดเรียบร้อย" + cReset)
 			waitEnter(r)
 		default:
 			fmt.Println("\n" + cRedBold + "กรุณาเลือกให้ถูกต้อง..." + cReset)
 			time.Sleep(2 * time.Second)
 		}
+	}
+}
+
+// paintSpeedRow prints one "<label> : เปิด (N Mbps) / ปิด" status line.
+func paintSpeedRow(label string, mbps int) {
+	if mbps > 0 {
+		fmt.Printf("%s%-22s%s : %sเปิด (%d Mbps)%s\n", cYelBold, label, cWhtBold, cGrnBold, mbps, cReset)
+	} else {
+		fmt.Printf("%s%-22s%s : %sปิด%s\n", cYelBold, label, cWhtBold, cRedBold, cReset)
 	}
 }
 
@@ -1090,7 +1127,7 @@ func ovpnInstanceAdd(r *bufio.Reader) error {
 			return aerr
 		}},
 		{Label: "ผูก speed limit (ถ้าเปิดอยู่)", Work: func() error {
-			if speedlimit.Load() > 0 {
+			if len(speedlimit.LoadAll()) > 0 {
 				return speedlimit.InjectServerConf()
 			}
 			return nil
@@ -1134,88 +1171,45 @@ func ovpnDNSPushLines() []string {
 	return out
 }
 
-// speedLimitSet asks for a Mbps value, persists it, injects the
-// learn-address hook, and restarts OpenVPN. If any step after Save fails,
-// it rolls back so the on-disk state matches what the menu will report on
-// next render (no "enabled" mirage while the daemon is unaware).
-func speedLimitSet(r *bufio.Reader, svc service.Service) error {
+// speedLimitSetKey asks for a Mbps value for one instance (0 = clear),
+// persists it, and restarts only that instance. On restart failure the
+// previous value is restored so the menu can't drift from reality.
+func speedLimitSetKey(r *bufio.Reader, key string, target service.Service) error {
 	fmt.Println()
-	fmt.Println(cYelBold + "ใส่ความเร็ว (Mbps) ต่อ session — ตัวอย่าง: 5, 10, 25, 100" + cReset)
+	fmt.Println(cYelBold + "ใส่ความเร็ว (Mbps) ต่อ session — ตัวอย่าง: 5, 10, 25, 100 (0 = ปิด)" + cReset)
+	prev := speedlimit.LoadFor(key)
 	defaultVal := "10"
-	if cur := speedlimit.Load(); cur > 0 {
-		defaultVal = strconv.Itoa(cur)
+	if prev > 0 {
+		defaultVal = strconv.Itoa(prev)
 	}
 	line, err := promptLineDefault(r, "Mbps", defaultVal)
 	if err != nil {
 		return err
 	}
 	mbps, err := strconv.Atoi(strings.TrimSpace(line))
-	if err != nil || mbps < 1 || mbps > 10000 {
-		return fmt.Errorf("ต้องเป็นตัวเลข 1-10000")
+	if err != nil || mbps < 0 || mbps > 10000 {
+		return fmt.Errorf("ต้องเป็นตัวเลข 0-10000")
 	}
-	prev := speedlimit.Load()
-	if err := speedlimit.Save(mbps); err != nil {
+	if err := speedlimit.SetLimit(key, mbps); err != nil {
 		return err
 	}
-	if err := speedlimit.InjectServerConf(); err != nil {
-		rollbackSpeedLimit(prev)
-		return err
+	port := target.Port
+	if key == speedlimit.MainKey {
+		port = readOpenVPNPort(target) // descriptor default is 1194; read the real one
+	}
+	label := fmt.Sprintf("ตั้งค่า %d Mbps + รีสตาร์ทพอร์ต %d", mbps, port)
+	if mbps == 0 {
+		label = fmt.Sprintf("ปิดการจำกัด + รีสตาร์ทพอร์ต %d", port)
 	}
 	fmt.Println()
 	if err := progress.Run([]progress.Step{
-		{Label: fmt.Sprintf("ตั้งค่า %d Mbps + รีสตาร์ท OPENVPN", mbps), Work: func() error {
-			if err := service.Restart(svc); err != nil {
-				return err
-			}
-			restartOVPNInstances()
-			return nil
-		}},
+		{Label: label, Work: func() error { return service.Restart(target) }},
 	}); err != nil {
-		rollbackSpeedLimit(prev)
+		_ = speedlimit.SetLimit(key, prev)
 		return err
 	}
 	fmt.Println("\n" + cGrnBold + "ตั้งค่าเรียบร้อย" + cReset)
 	waitEnter(r)
-	return nil
-}
-
-// restartOVPNInstances restarts every extra instance so a speed-limit
-// change applies across all ports, not just the primary. Best-effort:
-// a stopped instance failing to restart shouldn't abort the primary flow.
-func restartOVPNInstances() {
-	insts, _ := ovpninstance.List()
-	for _, inst := range insts {
-		_ = service.Restart(inst.Service())
-	}
-}
-
-// rollbackSpeedLimit restores whatever cap was active before the failed
-// speedLimitSet call — 0 means strip the config and the learn-address
-// line entirely; >0 means write the previous value back. Best-effort;
-// errors are swallowed because we're already in a failure path.
-func rollbackSpeedLimit(prev int) {
-	if prev > 0 {
-		_ = speedlimit.Save(prev)
-		return
-	}
-	_ = speedlimit.Disable()
-	_ = speedlimit.StripServerConf()
-}
-
-// speedLimitDisable removes the config, strips the learn-address line,
-// and restarts OpenVPN. Existing sessions keep their tc classes until
-// they reconnect — good enough for a menu-driven toggle.
-func speedLimitDisable(svc service.Service) error {
-	if err := speedlimit.Disable(); err != nil {
-		return err
-	}
-	if err := speedlimit.StripServerConf(); err != nil {
-		return err
-	}
-	if err := service.Restart(svc); err != nil {
-		return err
-	}
-	restartOVPNInstances()
 	return nil
 }
 
