@@ -45,9 +45,27 @@ func CollectStats() SysStats {
 	s.RAMTotal, s.MemUsedPct = readRAM()
 	s.CPUUsedPct = readCPU()
 	s.TotalUsers = countUsers()
-	// OnlineNow / ExpiredCt mirror v1's wc + grep but on data sources we
-	// haven't migrated yet; show zeros until P5.x exposes them.
+	s.OnlineNow, s.ExpiredCt = countOnlineExpired()
 	return s
+}
+
+// countOnlineExpired reuses the same data the users-list page uses
+// (readSSHLogins + readOpenVPNUsers + chageExpiry against systemUsers)
+// so the main-menu header can't disagree with the list — one user
+// online there means at least one online here.
+func countOnlineExpired() (online, expired int) {
+	sshOnline := readSSHLogins()
+	ovpnOnline := readOpenVPNUsers()
+	for _, rec := range systemUsers() {
+		if sshOnline[rec.Name] > 0 || ovpnOnline[rec.Name] > 0 {
+			online++
+		}
+		exp, daysLeft := chageExpiry(rec.Name)
+		if exp != "never" && exp != "" && daysLeft < 0 {
+			expired++
+		}
+	}
+	return online, expired
 }
 
 // readOSName mirrors the cut -d' ' lookups v1 does against /etc/issue.net.
