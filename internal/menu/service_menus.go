@@ -906,23 +906,49 @@ func speedLimitMenu(r *bufio.Reader, svc service.Service) {
 		limits := speedlimit.LoadAll()
 		insts, _ := ovpninstance.List()
 
-		fmt.Println()
-		paintSpeedRow(fmt.Sprintf("พอร์ตหลัก %d/%s", readOpenVPNPort(svc), ovpnProto()),
-			limits[speedlimit.MainKey])
+		// One selectable row per port: index 1 = primary, 2.. = instances.
+		type speedPort struct {
+			key    string
+			label  string
+			target service.Service
+		}
+		ports := []speedPort{{
+			key:    speedlimit.MainKey,
+			label:  fmt.Sprintf("พอร์ตหลัก %d/%s", readOpenVPNPort(svc), ovpnProto()),
+			target: svc,
+		}}
 		for _, inst := range insts {
-			paintSpeedRow(fmt.Sprintf("#%d พอร์ต %d/%s", inst.ID, inst.Port, inst.Proto),
-				limits[strconv.Itoa(inst.ID)])
+			ports = append(ports, speedPort{
+				key:    strconv.Itoa(inst.ID),
+				label:  fmt.Sprintf("พอร์ต %d/%s", inst.Port, inst.Proto),
+				target: inst.Service(),
+			})
+		}
+
+		fmt.Println()
+		for n, p := range ports {
+			fmt.Printf("%s[%s%d%s]%s ", cRedBold, cCyanBold, n+1, cRedBold, cReset)
+			paintSpeedRow(p.label, limits[p.key])
 		}
 		fmt.Println()
 
-		fmt.Printf("%s[%s1%s] %s• %sตั้งค่าพอร์ตหลัก%s\n", cRedBold, cCyanBold, cRedBold, cWhtBold, cYelBold, cReset)
-		if len(insts) > 0 {
-			fmt.Printf("%s[%s2%s] %s• %sตั้งค่าพอร์ตเพิ่มเติม%s\n", cRedBold, cCyanBold, cRedBold, cWhtBold, cYelBold, cReset)
-		}
-		if len(limits) > 0 {
-			fmt.Printf("%s[%s3%s] %s• %sปิดการจำกัดทั้งหมด%s\n", cRedBold, cCyanBold, cRedBold, cWhtBold, cYelBold, cReset)
-		}
+		fmt.Printf("%s[%s1%s] %s• %sเลือกพอร์ตจำกัดความเร็ว%s\n", cRedBold, cCyanBold, cRedBold, cWhtBold, cYelBold, cReset)
+		fmt.Printf("%s[%s2%s] %s• %sปิดพอร์ตที่จำกัดความเร็ว%s\n", cRedBold, cCyanBold, cRedBold, cWhtBold, cYelBold, cReset)
 		fmt.Printf("%s[%s0%s] %s• %sย้อนกลับ%s\n\n", cRedBold, cCyanBold, cRedBold, cWhtBold, cYelBold, cReset)
+
+		pickPort := func() (speedPort, bool) {
+			line, err := promptLineDefault(r, "เลือกพอร์ตหมายเลข", "1")
+			if err != nil {
+				return speedPort{}, false
+			}
+			n, err := strconv.Atoi(strings.TrimSpace(line))
+			if err != nil || n < 1 || n > len(ports) {
+				fmt.Println("\n" + cRedBold + "หมายเลขไม่ถูกต้อง" + cReset)
+				waitEnter(r)
+				return speedPort{}, false
+			}
+			return ports[n-1], true
+		}
 
 		choice, err := menuPrompt(r)
 		if err != nil {
@@ -932,43 +958,35 @@ func speedLimitMenu(r *bufio.Reader, svc service.Service) {
 		case "0", "00":
 			return
 		case "1", "01":
-			if err := speedLimitSetKey(r, speedlimit.MainKey, svc); err != nil {
-				fmt.Println("\n" + cRedBold + "[ผิดพลาด] " + cYelBold + err.Error() + cReset)
-				waitEnter(r)
-			}
-		case "2", "02":
-			if len(insts) == 0 {
-				fmt.Println("\n" + cRedBold + "กรุณาเลือกให้ถูกต้อง..." + cReset)
-				time.Sleep(2 * time.Second)
-				continue
-			}
-			if inst, ok := ovpnInstancePick(r, insts, "ตั้งค่า"); ok {
-				if err := speedLimitSetKey(r, strconv.Itoa(inst.ID), inst.Service()); err != nil {
+			fmt.Println()
+			if p, ok := pickPort(); ok {
+				if err := speedLimitSetKey(r, p.key, p.target); err != nil {
 					fmt.Println("\n" + cRedBold + "[ผิดพลาด] " + cYelBold + err.Error() + cReset)
 					waitEnter(r)
 				}
 			}
-		case "3", "03":
-			if len(limits) == 0 {
-				continue
-			}
-			if err := speedlimit.DisableAll(); err != nil {
-				fmt.Println("\n" + cRedBold + "[ผิดพลาด] " + cYelBold + err.Error() + cReset)
-				waitEnter(r)
-				continue
-			}
+		case "2", "02":
 			fmt.Println()
-			_ = progress.Run([]progress.Step{
-				{Label: "รีสตาร์ท OPENVPN ทุกพอร์ต", Work: func() error {
-					err := service.Restart(svc)
-					for _, inst := range insts {
-						_ = service.Restart(inst.Service())
-					}
-					return err
-				}},
-			})
-			fmt.Println("\n" + cGrnBold + "ปิดการจำกัดทั้งหมดเรียบร้อย" + cReset)
-			waitEnter(r)
+			if p, ok := pickPort(); ok {
+				if limits[p.key] == 0 {
+					fmt.Println("\n" + cYelBold + "พอร์ตนี้ไม่ได้จำกัดความเร็วอยู่แล้ว" + cReset)
+					waitEnter(r)
+					continue
+				}
+				if err := speedlimit.SetLimit(p.key, 0); err != nil {
+					fmt.Println("\n" + cRedBold + "[ผิดพลาด] " + cYelBold + err.Error() + cReset)
+					waitEnter(r)
+					continue
+				}
+				fmt.Println()
+				_ = progress.Run([]progress.Step{
+					{Label: "ปิดการจำกัด + รีสตาร์ท " + p.label, Work: func() error {
+						return service.Restart(p.target)
+					}},
+				})
+				fmt.Println("\n" + cGrnBold + "ปิดการจำกัดเรียบร้อย" + cReset)
+				waitEnter(r)
+			}
 		default:
 			fmt.Println("\n" + cRedBold + "กรุณาเลือกให้ถูกต้อง..." + cReset)
 			time.Sleep(2 * time.Second)
