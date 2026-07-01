@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -710,28 +711,32 @@ func readSSHLogins() map[string]int {
 	return out
 }
 
-// readOpenVPNUsers parses the OpenVPN status log for connected clients.
-// Supports both status-version 1 (default, CSV after "Common Name," header)
-// and status-version 2 (tab-separated CLIENT_LIST\t rows).
-// Tries /var/log/openvpn-status.log first (where our server.conf writes),
-// then /etc/openvpn/openvpn-status.log as fallback.
+// readOpenVPNUsers parses every OpenVPN status log for connected clients
+// and merges the counts: the primary /var/log/openvpn-status.log plus each
+// extra instance's openvpn-status<N>.log. Supports both status-version 1
+// (default, CSV after "Common Name," header) and status-version 2
+// (tab-separated CLIENT_LIST\t rows).
 func readOpenVPNUsers() map[string]int {
 	out := map[string]int{}
-	var data []byte
-	for _, p := range []string{
-		"/var/log/openvpn-status.log",
-		"/etc/openvpn/openvpn-status.log",
-	} {
-		if d, err := os.ReadFile(p); err == nil {
-			data = d
-			break
+	paths, _ := filepath.Glob("/var/log/openvpn-status*.log")
+	if len(paths) == 0 {
+		// legacy fallback for pre-v2 installs
+		paths = []string{"/etc/openvpn/openvpn-status.log"}
+	}
+	for _, p := range paths {
+		data, err := os.ReadFile(p)
+		if err != nil {
+			continue
 		}
+		countOVPNStatus(string(data), out)
 	}
-	if data == nil {
-		return out
-	}
+	return out
+}
+
+// countOVPNStatus merges one status log's client list into counts.
+func countOVPNStatus(data string, out map[string]int) {
 	inList := false
-	for _, line := range strings.Split(string(data), "\n") {
+	for _, line := range strings.Split(data, "\n") {
 		// status-version 2: tab-separated
 		if strings.HasPrefix(line, "CLIENT_LIST\t") {
 			parts := strings.SplitN(line, "\t", 3)
@@ -756,7 +761,6 @@ func readOpenVPNUsers() map[string]int {
 			}
 		}
 	}
-	return out
 }
 
 // readDropbearLogins: dropbear writes to syslog rather than utmp so we

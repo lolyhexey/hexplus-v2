@@ -23,6 +23,7 @@ import (
 	"io/fs"
 
 	"github.com/lolyhexey/hexplus/internal/assets"
+	"github.com/lolyhexey/hexplus/internal/ovpninstance"
 	"github.com/lolyhexey/hexplus/internal/pki"
 	"github.com/lolyhexey/hexplus/internal/progress"
 	"github.com/lolyhexey/hexplus/internal/service"
@@ -794,6 +795,11 @@ func openvpnMenu(r *bufio.Reader, svc service.Service) error {
 		fmt.Printf("%s[%s6%s] %s• %sรีสตาร์ท OPENVPN%s\n", cRedBold, cCyanBold, cRedBold, cWhtBold, cYelBold, cReset)
 		fmt.Printf("%s[%s7%s] %s• %sดู log OPENVPN%s\n", cRedBold, cCyanBold, cRedBold, cWhtBold, cYelBold, cReset)
 		fmt.Printf("%s[%s8%s] %s• %sจำกัดความเร็ว %s%s\n", cRedBold, cCyanBold, cRedBold, cWhtBold, cYelBold, speedMark, cReset)
+		instMark := ""
+		if insts, _ := ovpninstance.List(); len(insts) > 0 {
+			instMark = fmt.Sprintf("%s[%s%d%s]%s", cRedBold, cGrnBold, len(insts), cRedBold, cReset)
+		}
+		fmt.Printf("%s[%s9%s] %s• %sพอร์ตเพิ่มเติม %s%s\n", cRedBold, cCyanBold, cRedBold, cWhtBold, cYelBold, instMark, cReset)
 		fmt.Printf("%s[%s0%s] %s• %sย้อนกลับ%s\n", cRedBold, cCyanBold, cRedBold, cWhtBold, cYelBold, cReset)
 		fmt.Println()
 
@@ -821,6 +827,17 @@ func openvpnMenu(r *bufio.Reader, svc service.Service) error {
 			paintTitleBar("             ลบ OPENVPN              ")
 			fmt.Println()
 			if err := progress.Run([]progress.Step{
+				{Label: "ลบพอร์ตเพิ่มเติมทั้งหมด", Work: func() error {
+					// Tear extra instances down BEFORE /etc/openvpn is
+					// removed — Remove() needs the registry that lives there,
+					// and leaving units running against deleted configs would
+					// orphan them until reboot.
+					insts, _ := ovpninstance.List()
+					for _, inst := range insts {
+						_ = ovpninstance.Remove(inst.ID)
+					}
+					return nil
+				}},
 				{Label: "หยุด + ลบ OPENVPN", Work: func() error {
 					_, err := service.UninstallService(svc)
 					return err
@@ -860,6 +877,8 @@ func openvpnMenu(r *bufio.Reader, svc service.Service) error {
 			showUnitLog(r, svc.UnitName)
 		case "8", "08":
 			speedLimitMenu(r, svc)
+		case "9", "09":
+			ovpnInstanceMenu(r)
 		default:
 			fmt.Println("\n" + cRedBold + "กรุณาเลือกให้ถูกต้อง..." + cReset)
 			time.Sleep(2 * time.Second)
@@ -917,6 +936,192 @@ func speedLimitMenu(r *bufio.Reader, svc service.Service) {
 	}
 }
 
+// ovpnInstanceMenu manages extra OpenVPN instances (menu → OPENVPN → [9]).
+// Each instance is a separate daemon with its own port/proto/tun/subnet,
+// sharing the primary PKI so existing users connect without a new profile.
+func ovpnInstanceMenu(r *bufio.Reader) {
+	for {
+		clearScreen()
+		paintTitleBar("       พอร์ตเพิ่มเติม OPENVPN        ")
+		insts, err := ovpninstance.List()
+		if err != nil {
+			fmt.Println("\n" + cRedBold + "[ผิดพลาด] " + cYelBold + err.Error() + cReset)
+			waitEnter(r)
+			return
+		}
+
+		fmt.Printf("\n%sพอร์ตหลัก%s : %s%d/%s%s\n\n", cYelBold, cWhtBold, cGrnBold,
+			ovpnPort(), ovpnProto(), cReset)
+		if len(insts) == 0 {
+			fmt.Println(cWhtBold + "ยังไม่มีพอร์ตเพิ่มเติม" + cReset)
+		} else {
+			for _, inst := range insts {
+				stMark := cRedBold + "หยุด" + cReset
+				if st, _ := service.Status(inst.Service()); st.ActiveState == "active" {
+					stMark = cGrnBold + "ทำงาน" + cReset
+				}
+				fmt.Printf("%s#%d%s  พอร์ต %s%d/%s%s  subnet %s%s%s  [%s]\n",
+					cCyanBold, inst.ID, cWhtBold,
+					cGrnBold, inst.Port, inst.Proto, cWhtBold,
+					cYelBold, inst.Subnet(), cWhtBold, stMark)
+			}
+		}
+		fmt.Println()
+		paintOptions([][2]string{
+			{"1", "เพิ่มพอร์ต"},
+			{"2", "ลบพอร์ต"},
+			{"3", "รีสตาร์ทพอร์ต"},
+			{"0", "ย้อนกลับ"},
+		})
+		fmt.Println()
+
+		choice, err := menuPrompt(r)
+		if err != nil {
+			return
+		}
+		switch choice {
+		case "0", "00":
+			return
+		case "1", "01":
+			if err := ovpnInstanceAdd(r); err != nil {
+				fmt.Println("\n" + cRedBold + "[ผิดพลาด] " + cYelBold + err.Error() + cReset)
+				waitEnter(r)
+			}
+		case "2", "02":
+			if inst, ok := ovpnInstancePick(r, insts, "ลบ"); ok {
+				fmt.Print("\n" + cYelBold + "ยืนยันลบพอร์ต " + strconv.Itoa(inst.Port) + " หรือไม่ " + cRedBold + "? " + cGrnBold + "[y/n]: " + cReset)
+				line, _ := r.ReadString('\n')
+				if !isYes(line) {
+					continue
+				}
+				if err := ovpninstance.Remove(inst.ID); err != nil {
+					fmt.Println("\n" + cRedBold + "[ผิดพลาด] " + cYelBold + err.Error() + cReset)
+				} else {
+					fmt.Println("\n" + cGrnBold + "ลบพอร์ตเรียบร้อย" + cReset)
+				}
+				waitEnter(r)
+			}
+		case "3", "03":
+			if inst, ok := ovpnInstancePick(r, insts, "รีสตาร์ท"); ok {
+				if err := service.Restart(inst.Service()); err != nil {
+					fmt.Println("\n" + cRedBold + "[ผิดพลาด] " + cYelBold + err.Error() + cReset)
+				} else {
+					fmt.Println("\n" + cGrnBold + "รีสตาร์ทเรียบร้อย" + cReset)
+				}
+				waitEnter(r)
+			}
+		default:
+			fmt.Println("\n" + cRedBold + "กรุณาเลือกให้ถูกต้อง..." + cReset)
+			time.Sleep(2 * time.Second)
+		}
+	}
+}
+
+// ovpnInstancePick prompts for an instance ID out of the given list.
+// Returns ok=false on empty list, invalid input, or unknown ID.
+func ovpnInstancePick(r *bufio.Reader, insts []ovpninstance.Instance, verb string) (ovpninstance.Instance, bool) {
+	if len(insts) == 0 {
+		fmt.Println("\n" + cRedBold + "ยังไม่มีพอร์ตเพิ่มเติม" + cReset)
+		waitEnter(r)
+		return ovpninstance.Instance{}, false
+	}
+	line, err := promptLineDefault(r, "เลือกหมายเลข # ที่จะ"+verb, strconv.Itoa(insts[0].ID))
+	if err != nil {
+		return ovpninstance.Instance{}, false
+	}
+	id, err := strconv.Atoi(strings.TrimSpace(line))
+	if err != nil {
+		fmt.Println("\n" + cRedBold + "หมายเลขไม่ถูกต้อง" + cReset)
+		waitEnter(r)
+		return ovpninstance.Instance{}, false
+	}
+	for _, inst := range insts {
+		if inst.ID == id {
+			return inst, true
+		}
+	}
+	fmt.Println("\n" + cRedBold + "ไม่พบหมายเลข " + strconv.Itoa(id) + cReset)
+	waitEnter(r)
+	return ovpninstance.Instance{}, false
+}
+
+// ovpnInstanceAdd drives the add-port flow: proto → port → create + start.
+func ovpnInstanceAdd(r *bufio.Reader) error {
+	fmt.Println()
+	protoLine, err := promptLineDefault(r, "โปรโตคอล (tcp/udp)", "udp")
+	if err != nil {
+		return err
+	}
+	proto := strings.ToLower(strings.TrimSpace(protoLine))
+	if proto != "tcp" && proto != "udp" {
+		return fmt.Errorf("โปรโตคอลต้องเป็น tcp หรือ udp")
+	}
+	portLine, err := promptLineDefault(r, "พอร์ต", "1194")
+	if err != nil {
+		return err
+	}
+	port, err := strconv.Atoi(strings.TrimSpace(portLine))
+	if err != nil || port < 1 || port > 65535 {
+		return fmt.Errorf("พอร์ตไม่ถูกต้อง")
+	}
+	if err := checkPortFree(port, proto); err != nil {
+		return err
+	}
+
+	var inst ovpninstance.Instance
+	var listening bool
+	fmt.Println()
+	if err := progress.Run([]progress.Step{
+		{Label: fmt.Sprintf("สร้าง config พอร์ต %d/%s", port, proto), Work: func() error {
+			var aerr error
+			inst, aerr = ovpninstance.Add(port, proto, ovpnDNSPushLines())
+			return aerr
+		}},
+		{Label: "ผูก speed limit (ถ้าเปิดอยู่)", Work: func() error {
+			if speedlimit.Load() > 0 {
+				return speedlimit.InjectServerConf()
+			}
+			return nil
+		}},
+		{Label: "เริ่ม OPENVPN instance", Work: func() error {
+			if err := systemctlRun("enable", "--now", inst.UnitName()); err != nil {
+				return err
+			}
+			time.Sleep(700 * time.Millisecond)
+			listening, _ = service.ListenStatus(port, proto)
+			return nil
+		}},
+	}); err != nil {
+		return err
+	}
+
+	fmt.Println()
+	if listening {
+		fmt.Println(cGrnBold + "เพิ่มพอร์ตสำเร็จ !" + cYelBold + " พอร์ต: " + cWhtBold + strconv.Itoa(port) + "/" + proto + cReset)
+	} else {
+		fmt.Println(cRedBold + "[ผิดพลาด]" + cYelBold + " instance เริ่มไม่สำเร็จ — ตรวจสอบ journalctl -u " + inst.UnitName() + cReset)
+	}
+	waitEnter(r)
+	return nil
+}
+
+// ovpnDNSPushLines copies the `push "dhcp-option DNS ..."` lines from the
+// primary server.conf so a new instance hands out the same resolvers.
+func ovpnDNSPushLines() []string {
+	data, err := os.ReadFile("/etc/openvpn/server.conf")
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, line := range strings.Split(string(data), "\n") {
+		trim := strings.TrimSpace(line)
+		if strings.HasPrefix(trim, `push "dhcp-option DNS`) {
+			out = append(out, trim)
+		}
+	}
+	return out
+}
+
 // speedLimitSet asks for a Mbps value, persists it, injects the
 // learn-address hook, and restarts OpenVPN. If any step after Save fails,
 // it rolls back so the on-disk state matches what the menu will report on
@@ -946,7 +1151,13 @@ func speedLimitSet(r *bufio.Reader, svc service.Service) error {
 	}
 	fmt.Println()
 	if err := progress.Run([]progress.Step{
-		{Label: fmt.Sprintf("ตั้งค่า %d Mbps + รีสตาร์ท OPENVPN", mbps), Work: func() error { return service.Restart(svc) }},
+		{Label: fmt.Sprintf("ตั้งค่า %d Mbps + รีสตาร์ท OPENVPN", mbps), Work: func() error {
+			if err := service.Restart(svc); err != nil {
+				return err
+			}
+			restartOVPNInstances()
+			return nil
+		}},
 	}); err != nil {
 		rollbackSpeedLimit(prev)
 		return err
@@ -954,6 +1165,16 @@ func speedLimitSet(r *bufio.Reader, svc service.Service) error {
 	fmt.Println("\n" + cGrnBold + "ตั้งค่าเรียบร้อย" + cReset)
 	waitEnter(r)
 	return nil
+}
+
+// restartOVPNInstances restarts every extra instance so a speed-limit
+// change applies across all ports, not just the primary. Best-effort:
+// a stopped instance failing to restart shouldn't abort the primary flow.
+func restartOVPNInstances() {
+	insts, _ := ovpninstance.List()
+	for _, inst := range insts {
+		_ = service.Restart(inst.Service())
+	}
 }
 
 // rollbackSpeedLimit restores whatever cap was active before the failed
@@ -979,7 +1200,11 @@ func speedLimitDisable(svc service.Service) error {
 	if err := speedlimit.StripServerConf(); err != nil {
 		return err
 	}
-	return service.Restart(svc)
+	if err := service.Restart(svc); err != nil {
+		return err
+	}
+	restartOVPNInstances()
+	return nil
 }
 
 // ovpnConfContains checks if /etc/openvpn/server.conf contains a keyword.

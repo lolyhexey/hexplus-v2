@@ -14,6 +14,7 @@ package speedlimit
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 )
@@ -25,10 +26,6 @@ const (
 	// ScriptPath is the learn-address hook. OpenVPN calls it with
 	// "add|update|delete <tun_ip> <cn>" every time a client joins/leaves.
 	ScriptPath = "/usr/local/bin/hexplus-learn-address"
-
-	// ServerConfPath is /etc/openvpn/server.conf. Speedlimit toggles a
-	// single `learn-address` directive in it.
-	ServerConfPath = "/etc/openvpn/server.conf"
 
 	// learnAddressLine is injected into server.conf when shaping is on,
 	// and stripped when off. String is matched exactly for removal.
@@ -86,41 +83,52 @@ func deployScript() error {
 	return os.WriteFile(ScriptPath, []byte(learnAddressScript), 0o755)
 }
 
-// InjectServerConf makes sure server.conf contains the learn-address line
-// (idempotent). Returns nil silently if server.conf doesn't exist yet —
-// pki.Init hasn't run, and there's no meaningful action to take.
-func InjectServerConf() error {
-	data, err := os.ReadFile(ServerConfPath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
-		return err
-	}
-	conf := string(data)
-	if strings.Contains(conf, learnAddressLine) {
-		return nil
-	}
-	conf = strings.TrimRight(conf, "\n") + "\n" + learnAddressLine + "\n"
-	return os.WriteFile(ServerConfPath, []byte(conf), 0o644)
+// serverConfs returns every OpenVPN server config the shaper should hook:
+// the primary server.conf plus every extra-instance server<N>.conf.
+func serverConfs() []string {
+	matches, _ := filepath.Glob("/etc/openvpn/server*.conf")
+	return matches
 }
 
-// StripServerConf removes any learn-address line pointing at our script.
-// Idempotent; safe to call when the line isn't present.
-func StripServerConf() error {
-	data, err := os.ReadFile(ServerConfPath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
-		return err
-	}
-	var out []string
-	for _, line := range strings.Split(string(data), "\n") {
-		if strings.TrimSpace(line) == learnAddressLine {
+// InjectServerConf makes sure every server*.conf contains the
+// learn-address line (idempotent). Silently does nothing when no config
+// exists yet — pki.Init hasn't run, there's no meaningful action to take.
+func InjectServerConf() error {
+	for _, path := range serverConfs() {
+		data, err := os.ReadFile(path)
+		if err != nil {
 			continue
 		}
-		out = append(out, line)
+		conf := string(data)
+		if strings.Contains(conf, learnAddressLine) {
+			continue
+		}
+		conf = strings.TrimRight(conf, "\n") + "\n" + learnAddressLine + "\n"
+		if err := os.WriteFile(path, []byte(conf), 0o644); err != nil {
+			return err
+		}
 	}
-	return os.WriteFile(ServerConfPath, []byte(strings.Join(out, "\n")), 0o644)
+	return nil
+}
+
+// StripServerConf removes any learn-address line pointing at our script
+// from every server*.conf. Idempotent; safe when the line isn't present.
+func StripServerConf() error {
+	for _, path := range serverConfs() {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		var out []string
+		for _, line := range strings.Split(string(data), "\n") {
+			if strings.TrimSpace(line) == learnAddressLine {
+				continue
+			}
+			out = append(out, line)
+		}
+		if err := os.WriteFile(path, []byte(strings.Join(out, "\n")), 0o644); err != nil {
+			return err
+		}
+	}
+	return nil
 }

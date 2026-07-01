@@ -130,6 +130,35 @@ func writeUnitFilesFor(svcs []Service) (written []string, skipped []string, err 
 	return written, skipped, nil
 }
 
+// WriteUnitFor renders one dynamic Service's unit (used by extra OpenVPN
+// instances that aren't part of the canonical All() set) and reloads
+// systemd when the file changed.
+func WriteUnitFor(svc Service) error {
+	written, _, err := writeUnitFilesFor([]Service{svc})
+	if err != nil {
+		return err
+	}
+	if len(written) > 0 {
+		if rerr := daemonReload(); rerr != nil {
+			return rerr
+		}
+	}
+	return nil
+}
+
+// RemoveUnitFor removes one dynamic Service's unit file. Missing file is
+// treated as already-gone.
+func RemoveUnitFor(svc Service) error {
+	dest := filepath.Join(SystemdUnitDir, svc.UnitName)
+	if err := os.Remove(dest); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return err
+	}
+	return daemonReload()
+}
+
 // RemoveUnits is the uninstall counterpart - drops the units and reloads
 // systemd. Missing files are treated as already-gone.
 func RemoveUnits() (removed []string, err error) {
