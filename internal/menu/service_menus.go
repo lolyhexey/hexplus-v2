@@ -783,8 +783,14 @@ func openvpnMenu(r *bufio.Reader, svc service.Service) error {
 		}
 
 		paintTitleBar("          จัดการ OPENVPN           ")
-		fmt.Printf("\n%sพอร์ต%s: %s%d%s\n\n",
-			cYelBold, cWhtBold, cGrnBold, port, cReset)
+		portLine := fmt.Sprintf("%d/%s", port, ovpnProto())
+		if insts, _ := ovpninstance.List(); len(insts) > 0 {
+			for _, inst := range insts {
+				portLine += fmt.Sprintf("%s, %s%d/%s", cWhtBold, cGrnBold, inst.Port, inst.Proto)
+			}
+		}
+		fmt.Printf("\n%sพอร์ต%s: %s%s%s\n\n",
+			cYelBold, cWhtBold, cGrnBold, portLine, cReset)
 
 		// [3], [4], [8] use inline label+marker, not paintOptions, to match v1 format.
 		fmt.Printf("%s[%s1%s] %s• %sเปลี่ยนพอร์ต%s\n", cRedBold, cCyanBold, cRedBold, cWhtBold, cYelBold, cReset)
