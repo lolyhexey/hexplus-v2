@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -149,6 +150,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "bad json"})
 		return
 	}
+	ip := remoteIP(r)
 	var (
 		adminID int64
 		hash    string
@@ -156,6 +158,8 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	row := s.db.QueryRow(`SELECT id, password_hash FROM admin_users WHERE username = ?`, in.Username)
 	if err := row.Scan(&adminID, &hash); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
+			s.auditLogin(in.Username, ip, false)
+			s.recordFailure(ip)
 			// Same 401 as a bad password so the response doesn't tell
 			// an attacker which usernames exist.
 			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid credentials"})
@@ -165,10 +169,14 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := bcrypt.CompareHashAndPassword([]byte(hash), []byte(in.Password)); err != nil {
+		s.auditLogin(in.Username, ip, false)
+		s.recordFailure(ip)
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid credentials"})
 		return
 	}
-	cookieVal, err := s.auth.issueSession(adminID, remoteIP(r))
+	s.auditLogin(in.Username, ip, true)
+	s.ipTrack.clearFailures(ip)
+	cookieVal, err := s.auth.issueSession(adminID, ip)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "session"})
 		return
@@ -250,4 +258,27 @@ func remoteIP(r *http.Request) string {
 		return host
 	}
 	return r.RemoteAddr
+}
+
+// auditLogin writes one row to login_attempts. Failures here are
+// logged and swallowed — a login shouldn't be blocked because the
+// audit table is briefly unwritable.
+func (s *Server) auditLogin(username, ip string, success bool) {
+	sv := 0
+	if success {
+		sv = 1
+	}
+	if _, err := s.db.Exec(
+		`INSERT INTO login_attempts (username, remote_ip, success, at) VALUES (?, ?, ?, ?)`,
+		username, ip, sv, time.Now().Unix()); err != nil {
+		log.Printf("panel: audit login: %v", err)
+	}
+}
+
+// recordFailure defers to ipTracker; separate method so tests can
+// override without touching the tracker directly.
+func (s *Server) recordFailure(ip string) {
+	if banned := s.ipTrack.recordFailure(ip); banned {
+		log.Printf("panel: ip %s banned after too many failed logins", ip)
+	}
 }

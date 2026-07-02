@@ -34,6 +34,24 @@ menu
 - SOCKS OpenVPN — tunnel ไปที่ OpenVPN port
 - รองรับหลาย port ต่อ slot, custom response code/message
 
+### V2Ray Web Panel (ใหม่)
+Panel จัดการ xray-core แบบ 3x-ui — เข้าเมนู `hexplus → 17 → 33` เพื่อเปิดใช้
+
+- **Protocol**: VLESS+REALITY+XTLS-Vision, VMess, Trojan, Shadowsocks/SS2022, Hysteria2, WireGuard, HTTP, SOCKS, Dokodemo-door
+- **Transport**: TCP / WS / gRPC / HTTPUpgrade / XHTTP / mKCP  •  **Security**: TLS / XTLS / Reality
+- **จัดการ client**: quota, expiry, IP limit, toggle, share link, QR code, subscription URL
+- **Routing + Outbounds**: rules ตาม domain/IP/inbound, WARP auto-provision (1 คลิก), fallback support
+- **Cert**: Let's Encrypt HTTP-01 + manual upload + renew ผ่าน UI
+- **Stats**: poll ทุก 10 วิ, quota enforcement + auto-disable เมื่อหมดอายุ
+- **Security**: bcrypt login + rate-limit (5 fail / 10 min → ban 1 hr) + CSRF + random URL prefix
+- **Backup**: `hexplus panel backup` → tarball, `restore` กลับใน 1 คำสั่ง
+
+Panel เสิร์ฟผ่าน HTTP ล้วน — แนะนำใช้ผ่าน SSH tunnel:
+```bash
+ssh -L 2053:localhost:2053 root@server
+# → เปิด http://localhost:2053/<random-prefix>/
+```
+
 ### ระบบ
 - systemd unit generation (สร้าง/อัพเดต unit file อัตโนมัติ)
 - `StartLimitIntervalSec=0` — service restart ไม่มีวันยอมแพ้

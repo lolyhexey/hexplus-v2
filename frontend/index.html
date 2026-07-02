@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="th">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>HEXPLUS Panel</title>
+    <!--
+      base href is rewritten at request time by the Go handler so the
+      SPA loads correctly under any URL prefix (the panel picks a
+      random one at install). Leave as "/" for dev; production build
+      gets a real value injected.
+    -->
+    <base href="/" id="hexplus-base" />
+  </head>
+  <body class="bg-background text-foreground">
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

@@ -44,6 +44,10 @@ func runPanel(args []string) {
 		runPanelPort(args[1:])
 	case "reset-password":
 		runPanelResetPassword(args[1:])
+	case "backup":
+		runPanelBackup(args[1:])
+	case "restore":
+		runPanelRestore(args[1:])
 	default:
 		fmt.Fprintf(os.Stderr, "unknown panel verb %q\n", args[0])
 		os.Exit(2)
@@ -182,6 +186,52 @@ func runPanelResetPassword(args []string) {
 	}
 	fmt.Printf("admin password for %q updated.\n", *username)
 	fmt.Printf("  password: %s\n", pw)
+}
+
+func runPanelBackup(args []string) {
+	fs := flag.NewFlagSet("panel backup", flag.ExitOnError)
+	out := fs.String("out", "/var/lib/hexplus/backups", "directory to write hexplus-panel-<ts>.tar.gz")
+	if err := fs.Parse(args); err != nil {
+		os.Exit(2)
+	}
+	if os.Geteuid() != 0 {
+		fmt.Fprintln(os.Stderr, "panel backup requires root")
+		os.Exit(1)
+	}
+	dest, res, err := panel.MakeBackup(*out)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "panel backup:", err)
+		os.Exit(1)
+	}
+	fmt.Println("backup written:")
+	fmt.Printf("  %s\n", dest)
+	for _, entry := range res.Included {
+		fmt.Printf("  + %s\n", entry)
+	}
+}
+
+func runPanelRestore(args []string) {
+	if len(args) == 0 {
+		fmt.Fprintln(os.Stderr, "usage: hexplus panel restore <path/to/backup.tar.gz>")
+		os.Exit(2)
+	}
+	if os.Geteuid() != 0 {
+		fmt.Fprintln(os.Stderr, "panel restore requires root")
+		os.Exit(1)
+	}
+	// Stop the units first so restore doesn't race a running daemon.
+	for _, name := range []string{"panel", "xray"} {
+		if svc, ok := service.ByName(name); ok {
+			_ = service.Stop(svc)
+		}
+	}
+	if err := panel.Restore(args[0]); err != nil {
+		fmt.Fprintln(os.Stderr, "panel restore:", err)
+		os.Exit(1)
+	}
+	fmt.Println("restore complete. Start the units when ready:")
+	fmt.Println("  hexplus service start xray")
+	fmt.Println("  hexplus service start panel")
 }
 
 // runXray dispatches `hexplus xray <verb>`. Currently only `reload`,

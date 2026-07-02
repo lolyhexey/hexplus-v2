@@ -220,32 +220,38 @@ Checklist สำหรับงานเพิ่ม V2Ray/Xray Web Panel เข
 
 ---
 
-## Phase 10 — Frontend (React + shadcn)
+## Phase 10 — Frontend (React + shadcn-style)
 
 ### Setup
-- [ ] `frontend/` scaffold (Vite + React 19 + shadcn/ui + Tailwind + TS)
-- [ ] `pnpm build` → output ไป `internal/panel/frontend/dist/`
-- [ ] Makefile target `make frontend` (รันก่อน `build-all`)
-- [ ] `//go:embed frontend/dist/*` ใน panel package
-- [ ] dev mode: อ่านจาก disk / prod: อ่านจาก embed (build tag)
+- [x] `frontend/` scaffold: Vite 6 + React 18 + TypeScript + Tailwind 3
+- [x] shadcn-style primitives inline (`Button` / `Input` / `Card` / `Dialog` / `Table` / `Label`) — ไม่ต้องพึ่ง shadcn CLI
+- [x] `pnpm build` → output ไป `internal/panel/frontend/dist/`
+- [x] Makefile target `make frontend` (แบ่งไปทำก่อน `build`) — fallback ไป npm ถ้าไม่มี pnpm, silent skip ถ้าไม่มีทั้งคู่
+- [x] `//go:embed all:dist` ใน `internal/panel/frontend/embed.go`
+- [x] `<base href>` rewrite ตอน serve เพื่อให้ SPA ทำงานใต้ random URL prefix ได้
+- [x] dev proxy ใน vite.config.ts ไป `PANEL_URL` (default `localhost:2053`)
 
 ### Pages
-- [ ] Login
-- [ ] Dashboard (traffic overview, service status)
-- [ ] Inbounds list + create/edit
-- [ ] Clients list + create/edit (per inbound)
-- [ ] Subscription settings
-- [ ] Routing rules
-- [ ] Outbounds
-- [ ] Certificates
-- [ ] Backup/Restore
-- [ ] Settings (admin password, panel port, theme)
+- [x] Login (POST /login + error handling)
+- [x] Dashboard (inbound count + rolled-up traffic ต่อ inbound)
+- [x] Inbounds list + create/edit dialog (JSON settings/stream)
+- [x] Clients per inbound + create + toggle + reset + extend + share link + QR + delete
+- [x] Routing rules list + create dialog
+- [x] Outbounds list + one-click WARP + delete
+- [x] Certificates list + Let's Encrypt (HTTP-01) + manual upload + renew + delete
+- [x] Settings (คู่มือ CLI menu 33 + คำแนะนำความปลอดภัย)
+- [ ] Subscription settings (advanced — token rotation) — defer
 
 ### UI polish
-- [ ] Dark/light theme toggle
-- [ ] i18n: TH + EN (ขั้นต้น)
-- [ ] Toast / dialog / form validation
-- [ ] Copy-to-clipboard + QR modal
+- [x] shadcn dark/light token ใน `index.css` (ค่าสี swap ผ่าน CSS var)
+- [ ] Theme toggle button — โครง class `.dark` วางไว้แล้ว, button ยังไม่ทำ
+- [x] i18n: ภาษาไทยเป็นหลัก (label + copy)
+- [x] Dialog + Table + form ครบ, copy-to-clipboard สำหรับ share link, QR modal
+
+### API integration
+- [x] `src/lib/api.ts` — fetch wrapper + CSRF token echo อัตโนมัติ + error typing
+- [x] Session guard ใน App.tsx (probe `/api/session` เข้า Login ถ้า 401)
+- [x] REST endpoints ครบ (inbounds, clients + ops, outbounds, rules, certs, WARP)
 
 ---
 
@@ -271,30 +277,31 @@ Checklist สำหรับงานเพิ่ม V2Ray/Xray Web Panel เข
 
 ## Phase 12 — Backup + Migration
 
-- [ ] backup: dump SQLite + xray config → tarball
-- [ ] restore: จาก tarball
-- [ ] auto-backup cron (daily → เก็บใน `/var/lib/hexplus/backups/`)
-- [ ] schema migration versioned
+- [x] `hexplus panel backup [--out dir]` → tarball `hexplus-panel-<ts>.tar.gz` ของ panel.db + panel.yaml + xray/config.json + xray/certs/**
+- [x] `hexplus panel restore <archive>` — validate path (no `..`, no absolute), stop units อัตโนมัติ, expand ทับ state dirs
+- [x] versioned migration ที่ `panel/db/migrations.go` (v1 → v2 → v3)
+- [ ] auto-backup cron daily — defer (มี CLI พร้อม, ผู้ใช้ตั้ง cron ได้เอง หรือรอ Phase 14)
 
 ---
 
 ## Phase 13 — Security hardening
 
-- [ ] rate-limit login endpoint
-- [ ] Fail2ban-style ban IP หลัง N failed logins
-- [ ] session timeout
-- [ ] CSRF token
-- [ ] HTTPS force
-- [ ] secure cookies
+- [x] rate-limit login: 5 failures / 10 min → ban 1 hour (in-memory tracker, log ban transitions)
+- [x] audit log ที่ `login_attempts` table (migration v3) — fail2ban อ่านต่อได้
+- [x] session timeout: 24h sliding (Phase 2 ทำแล้ว)
+- [x] CSRF: submit-cookie pattern (`hexplus_csrf` + `X-CSRF-Token` header, exempt `/login` และ `/sub/`)
+- [ ] HTTPS force — panel เป็น HTTP ล้วนตาม decision; user แปะ reverse proxy เอง
+- [x] session cookie `HttpOnly` + `SameSite=Strict`
 
 ---
 
 ## Phase 14 — QA / Release
 
-- [ ] unit tests (xray config gen, share link, stats parser)
+- [ ] unit tests (xray config gen, share link, stats parser) — defer, มีโครง ready
 - [ ] integration test: install → create inbound → connect real client → verify traffic
-- [ ] test บน amd64 / arm64 / armv7
-- [ ] update `README.md` เพิ่มหัวข้อ V2Ray Panel
+- [ ] test บน amd64 / arm64 / armv7 — `make build-all` พร้อม, integration บน VPS
+- [x] `v2ray-panel-todo.md` เป็น living checklist
+- [ ] update `README.md` เพิ่มหัวข้อ V2Ray Panel — ทำ commit ต่อไป
 - [ ] release binary + changelog
 
 ---

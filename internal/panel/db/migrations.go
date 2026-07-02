@@ -160,6 +160,19 @@ CREATE TABLE certs (
     updated_at      INTEGER NOT NULL
 );
 `,
+	// v3: login audit trail. Used by fail2ban / operators to spot
+	// break-in attempts. Kept short (username + ip + success) so the
+	// table stays tiny even under sustained scraping.
+	`
+CREATE TABLE login_attempts (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    username    TEXT    NOT NULL,
+    remote_ip   TEXT    NOT NULL,
+    success     INTEGER NOT NULL,
+    at          INTEGER NOT NULL
+);
+CREATE INDEX idx_login_at_ip ON login_attempts(remote_ip, at);
+`,
 }
 
 // targetVersion is len(migrations); DBs at this version are up to date.

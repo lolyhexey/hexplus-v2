@@ -7,20 +7,21 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/lolyhexey/hexplus/internal/panel/db"
+	"github.com/lolyhexey/hexplus/internal/panel/frontend"
 	"github.com/lolyhexey/hexplus/internal/xray"
 )
 
 // Server holds the panel's live dependencies. Constructed by Serve and
 // passed to handlers so tests can build one with fakes.
 type Server struct {
-	cfg    Config
-	db     *sql.DB
-	http   *http.Server
-	auth   *Auth
+	cfg     Config
+	db      *sql.DB
+	http    *http.Server
+	auth    *Auth
+	ipTrack *ipTracker
 }
 
 // Serve boots the panel: loads Config, opens the DB, wires the router,
@@ -40,9 +41,10 @@ func Serve(ctx context.Context) error {
 	auth := NewAuth(sqldb, cfg.SessionSecret)
 
 	s := &Server{
-		cfg:  cfg,
-		db:   sqldb,
-		auth: auth,
+		cfg:     cfg,
+		db:      sqldb,
+		auth:    auth,
+		ipTrack: newIPTracker(DefaultLoginRateLimit),
 	}
 	s.http = &http.Server{
 		Addr:              fmt.Sprintf("%s:%d", cfg.ListenAddr, cfg.Port),
@@ -98,7 +100,7 @@ func (s *Server) routes() http.Handler {
 
 	// Prefixed admin surface. Everything under s.cfg.URLPrefix.
 	admin := http.NewServeMux()
-	admin.HandleFunc("/login", s.handleLogin)
+	admin.HandleFunc("/login", s.ipTrack.wrapLoginRateLimit(s.handleLogin))
 	admin.HandleFunc("/logout", s.handleLogout)
 	admin.HandleFunc("/api/session", s.auth.RequireSession(s.handleSession))
 	s.registerInboundRoutes(admin)
@@ -106,39 +108,27 @@ func (s *Server) routes() http.Handler {
 	s.registerClientOpRoutes(admin)
 	s.registerRoutingRoutes(admin)
 	s.registerCertRoutes(admin)
-	admin.HandleFunc("/", s.handleRoot) // placeholder — frontend embed replaces this in Phase 10
+	// The embedded React SPA catches everything not matched above.
+	admin.Handle("/", frontend.Handler(s.cfg.URLPrefix))
+
+	// Wrap the admin sub-tree with CSRF middleware. /sub/ and /healthz
+	// live outside the prefix (and therefore outside CSRF) on purpose.
+	adminWithCSRF := wrapCSRF(admin)
 
 	if s.cfg.URLPrefix != "" && s.cfg.URLPrefix != "/" {
-		mux.Handle(s.cfg.URLPrefix+"/", http.StripPrefix(s.cfg.URLPrefix, admin))
+		mux.Handle(s.cfg.URLPrefix+"/", http.StripPrefix(s.cfg.URLPrefix, adminWithCSRF))
 		// bare prefix without trailing slash → redirect to prefix/ so
 		// relative URLs in the frontend resolve correctly.
 		mux.HandleFunc(s.cfg.URLPrefix, func(w http.ResponseWriter, r *http.Request) {
 			http.Redirect(w, r, s.cfg.URLPrefix+"/", http.StatusMovedPermanently)
 		})
 	} else {
-		mux.Handle("/", admin)
+		mux.Handle("/", adminWithCSRF)
 	}
 	return mux
 }
 
-// handleRoot serves the not-yet-embedded frontend. Phase 10 replaces
-// this with an embed.FS-backed handler; for now it just tells the user
-// the frontend is coming.
-func (s *Server) handleRoot(w http.ResponseWriter, r *http.Request) {
-	// Skip the health/login/api paths that already routed above.
-	if strings.HasPrefix(r.URL.Path, "/api/") || r.URL.Path == "/login" || r.URL.Path == "/logout" {
-		http.NotFound(w, r)
-		return
-	}
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	fmt.Fprintf(w, `<!doctype html>
-<html><head><title>HEXPLUS Panel</title></head>
-<body style="font-family:system-ui;max-width:640px;margin:2rem auto;padding:0 1rem;">
-<h1>HEXPLUS V2Ray Panel</h1>
-<p>Backend is up. Frontend bundle ships in Phase 10.</p>
-<p>Try: <code>POST %s/login</code> with <code>{"username":"...","password":"..."}</code></p>
-</body></html>`, s.cfg.URLPrefix)
-}
+// handleRoot removed — the embedded React bundle serves the SPA now.
 
 // handleSession returns the caller's admin identity (proves the session
 // cookie is valid). Placeholder — real impl reads from context in Phase 5.

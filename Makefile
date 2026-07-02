@@ -15,13 +15,29 @@ LDFLAGS := -s -w \
 
 DIST := dist
 
-.PHONY: build build-all clean test fmt vet tidy run-extract
+.PHONY: build build-all clean test fmt vet tidy run-extract frontend frontend-install
 
-build:
+build: frontend
 	go build -ldflags "$(LDFLAGS)" -o $(BINARY) $(CMD)
 
+# frontend builds the React SPA into internal/panel/frontend/dist so
+# //go:embed picks it up on the next go build. Requires node + pnpm on
+# the build host; skipped silently when pnpm is missing so a bare-Linux
+# CI still gets a functional (backend-only) binary.
+frontend:
+	@if command -v pnpm >/dev/null 2>&1; then \
+	  cd frontend && pnpm install --silent && pnpm build ; \
+	elif command -v npm >/dev/null 2>&1; then \
+	  cd frontend && npm install --silent && npm run build ; \
+	else \
+	  echo "pnpm/npm not found — skipping frontend build (backend-only bundle)" ; \
+	fi
+
+frontend-install:
+	cd frontend && pnpm install
+
 # Three primary linux targets. armv7 covers cheap ARM VPSes.
-build-all: $(DIST)/$(BINARY)-linux-amd64 $(DIST)/$(BINARY)-linux-arm64 $(DIST)/$(BINARY)-linux-armv7
+build-all: frontend $(DIST)/$(BINARY)-linux-amd64 $(DIST)/$(BINARY)-linux-arm64 $(DIST)/$(BINARY)-linux-armv7
 
 $(DIST)/$(BINARY)-linux-amd64:
 	@mkdir -p $(DIST)
