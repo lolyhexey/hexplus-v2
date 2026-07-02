@@ -10,12 +10,16 @@ import (
 	"io/fs"
 )
 
-// Embed only the three top-level binaries plus the marker files needed
-// for fs.Sub to find the bin/ subtree. We DON'T embed bin/_*-amd64 etc.
+// Embed only the top-level binaries plus the marker files needed for
+// fs.Sub to find the bin/ subtree. We DON'T embed bin/_*-amd64 etc.
 // (the buildx scratch trees) - those are dev artifacts; shipping them
 // roughly doubles the final binary size.
 //
-//go:embed bin/openvpn bin/squid bin/dropbearmulti bin/mime.conf bin/squid-errors.tar.gz bin/.gitkeep bin/README.placeholder
+// xray is optional at runtime — only extracted when the user opts into
+// installing the V2Ray panel via the menu. See internal/panel/ and
+// internal/xray/ for the extraction and lifecycle wiring.
+//
+//go:embed bin/openvpn bin/squid bin/dropbearmulti bin/xray bin/mime.conf bin/squid-errors.tar.gz bin/.gitkeep bin/README.placeholder
 var binFS embed.FS
 
 // Binaries returns the embedded binaries subtree rooted at "bin/".

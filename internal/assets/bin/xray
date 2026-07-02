@@ -1,0 +1,2 @@
+placeholder — replaced by build/build-statics.sh output (see build/Dockerfile.xray).
+Real xray-core binary is ~30MB; keeping a tiny placeholder in git so //go:embed resolves without shipping a 30MB blob through source control.

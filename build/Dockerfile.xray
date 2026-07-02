@@ -1,0 +1,47 @@
+# Static xray-core build via Alpine + Go toolchain.
+#
+# Output: a fully-static xray binary in /out/xray for the build-host arch.
+# Cross-arch builds run this image under qemu (handled by build-statics.sh).
+#
+# Why Alpine: matches the other statics; Go's own toolchain does the heavy
+# lifting via CGO_ENABLED=0, so we don't need musl-static libs the way the
+# C builds do.
+#
+# Notes:
+#   Tags "with_gvisor" is intentionally omitted — pulls in a big syscall
+#   emulation layer we don't use. VLESS/VMess/Trojan/SS/Reality all work
+#   without it. Enable later only if we ship TUN inbound.
+#
+# XRAY_VERSION defaults to a known-good tag. build-statics.sh may override
+# it via --build-arg XRAY_VERSION=vX.Y.Z to pin per hexplus release.
+
+ARG XRAY_VERSION=v25.3.6
+ARG ALPINE_VERSION=3.19
+ARG GO_VERSION=1.24
+
+FROM golang:${GO_VERSION}-alpine${ALPINE_VERSION} AS build
+ARG XRAY_VERSION
+
+RUN apk add --no-cache git bash
+
+WORKDIR /src
+RUN git clone --depth 1 --branch "${XRAY_VERSION}" https://github.com/XTLS/Xray-core.git xray-src
+
+WORKDIR /src/xray-src
+# CGO_ENABLED=0 forces the pure-Go netdns resolver and static linking with
+# no libc dependency — the output binary runs on any Linux of the same arch.
+# -trimpath strips build host paths; -ldflags "-s -w" drops the symbol table.
+RUN CGO_ENABLED=0 go build \
+        -trimpath \
+        -ldflags "-s -w -buildid=" \
+        -o /out/xray \
+        ./main
+
+RUN /out/xray version | head -5 \
+    && echo "---" \
+    && file /out/xray \
+    && echo "---" \
+    && ls -lh /out/xray
+
+FROM scratch AS export
+COPY --from=build /out/xray /xray

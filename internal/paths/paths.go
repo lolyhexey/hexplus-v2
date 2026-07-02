@@ -35,4 +35,22 @@ const (
 	// LogDir is reserved for our own log surface (P2.5). Services that
 	// integrate with systemd still go through the journal.
 	LogDir = "/var/log/hexplus"
+
+	// XrayStateDir holds xray-core's runtime config + generated keys.
+	// Kept under StateDir (not /etc/xray) so a full uninstall wipes it
+	// via the same StateDir cleanup as everything else hexplus owns.
+	XrayStateDir = StateDir + "/xray"
+
+	// XrayConfigPath is the config.json xray-core reads on start. Regen'd
+	// by internal/xray whenever inbounds/clients change; a reload triggers
+	// xray to re-read it.
+	XrayConfigPath = XrayStateDir + "/config.json"
+
+	// PanelStateDir holds the web panel's SQLite DB and any panel-local
+	// state (session store, self-signed cert if we ever add one).
+	PanelStateDir = StateDir + "/panel"
+
+	// PanelDBPath is the SQLite file the web panel uses for admins,
+	// inbounds, clients, traffic samples, settings, etc.
+	PanelDBPath = PanelStateDir + "/panel.db"
 )

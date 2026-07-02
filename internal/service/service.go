@@ -108,6 +108,35 @@ func All() []Service {
 			PortProto: "tcp",
 			After:     []string{"network-online.target"},
 		},
+		{
+			// xray-core daemon powering the V2Ray web panel. Unit file is
+			// written by the main install but not enabled — the panel
+			// install menu is what flips it on after the panel writes a
+			// working config.json to XrayConfigPath.
+			Name:        "xray",
+			DisplayName: "HEXPLUS Xray core (V2Ray panel)",
+			UnitName:    "hexplus-xray.service",
+			Binary:      paths.LibDir + "/xray",
+			Args:        []string{"run", "-c", paths.XrayConfigPath},
+			// Port intentionally 0 — xray listens on whatever inbounds the
+			// panel configures (dynamic per-user). The status probe skips
+			// port check when Port == 0.
+			After: []string{"network-online.target"},
+		},
+		{
+			// Web panel that manages xray inbounds/clients. Runs the
+			// hexplus binary in `panel serve` subcommand mode so we stay
+			// single-binary. Bind port lives in the panel config, not here.
+			Name:        "panel",
+			DisplayName: "HEXPLUS V2Ray web panel",
+			UnitName:    "hexplus-panel.service",
+			Binary:      paths.SelfPath,
+			Args:        []string{"panel", "serve"},
+			After:       []string{"network-online.target"},
+			// Panel reads/writes PanelStateDir under /var/lib, which is
+			// under /var — not affected by ProtectHome. Leave AllowHome
+			// false (the default) to keep /root out of reach.
+		},
 	}
 }
 

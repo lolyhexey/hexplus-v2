@@ -19,6 +19,7 @@
 !/internal/assets/bin/squid
 !/internal/assets/bin/openvpn
 !/internal/assets/bin/dropbearmulti
+!/internal/assets/bin/xray
 
 # Local dev
 .idea/

@@ -42,23 +42,25 @@ Checklist สำหรับงานเพิ่ม V2Ray/Xray Web Panel เข
 ## Phase 1 — Foundation (xray binary + skeleton)
 
 ### Build pipeline
-- [ ] `build/Dockerfile.xray` — static musl build ของ xray-core
-- [ ] `build/build-statics.sh` — เพิ่มขั้นตอน build xray
-- [ ] `internal/assets/bin/xray-core` — วาง binary + `//go:embed` entry
-- [ ] `internal/assets/embed.go` — เพิ่ม xray-core เข้า `Binaries()`
-- [ ] verify multi-arch build (amd64/arm64/armv7)
+- [x] `build/Dockerfile.xray` — Alpine + Go toolchain, CGO_ENABLED=0 static build จาก `XLTS/Xray-core`
+- [x] `build/build-statics.sh` — เพิ่ม `build_one xray xray` + summary entry
+- [x] `internal/assets/bin/xray` — placeholder file (จริงมาจาก build-statics.sh)
+- [x] `internal/assets/embed.go` — เพิ่ม `bin/xray` เข้า `//go:embed`
+- [ ] verify multi-arch build (amd64/arm64/armv7) — ต้อง run บน Linux + docker
 
 ### Xray wrapper package
-- [ ] สร้าง `internal/xray/` package
-- [ ] `xray/config.go` — gen `/etc/xray/config.json` จาก DB
-- [ ] `xray/daemon.go` — start/stop/reload xray subprocess
-- [ ] `xray/stats.go` — pull traffic stats จาก xray gRPC API (`:10085`)
-- [ ] `xray/client.go` — CRUD client (add/remove/quota/expiry)
+- [x] สร้าง `internal/xray/` package (`xray.go` doc + skeletons)
+- [x] `xray/config.go` — struct schema สำหรับ config.json (real gen ทำใน Phase 3)
+- [x] `xray/daemon.go` — Reload() stub
+- [x] `xray/stats.go` — Sample struct + Poll() stub
+- [x] `xray/client.go` — Client struct
 
-### Systemd
-- [ ] `hexplus-xray.service` — เพิ่มใน `service/service.go` (`All()`)
-- [ ] `hexplus-panel.service` — เพิ่มใน `service/service.go`
-- [ ] ทั้ง 2 unit **ไม่ auto-enable** ตอน install หลัก — enable เมื่อ user กดจากเมนู
+### Paths + Systemd
+- [x] `internal/paths/paths.go` — เพิ่ม `XrayStateDir`, `XrayConfigPath`, `PanelStateDir`, `PanelDBPath`
+- [x] `hexplus-xray.service` — เพิ่มใน `service.All()`
+- [x] `hexplus-panel.service` — เพิ่มใน `service.All()`
+- [x] ทั้ง 2 unit เขียนไฟล์ตอน install แต่ **ไม่ auto-enable** (per systemd.go docstring)
+- [x] `go build ./...` + `go vet ./...` ผ่านหลัง scaffolding
 
 ---
 

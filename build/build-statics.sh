@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Build the three static binaries (openvpn, squid, dropbear) for one target arch
-# and copy them into ../internal/assets/bin/ so the next `go build` picks them up.
+# Build the four static binaries (openvpn, squid, dropbear, xray) for one
+# target arch and copy them into ../internal/assets/bin/ so the next
+# `go build` picks them up.
 #
 # Run on Linux (or a Linux VM) with Docker installed.
 # Cross-arch: pass --platform linux/arm64 etc. Requires binfmt qemu setup
@@ -10,6 +11,7 @@
 #   ../internal/assets/bin/openvpn-<arch>
 #   ../internal/assets/bin/dropbearmulti-<arch>
 #   ../internal/assets/bin/squid-<arch>
+#   ../internal/assets/bin/xray-<arch>
 
 set -euo pipefail
 
@@ -47,12 +49,14 @@ build_one() {
 # Order: easy ones first so a failure on squid doesn't waste the openvpn/dropbear run.
 build_one openvpn openvpn || OPENVPN_FAILED=1
 build_one dropbear dropbearmulti || DROPBEAR_FAILED=1
+build_one xray xray || XRAY_FAILED=1
 build_one squid squid || SQUID_FAILED=1
 
 echo
 echo "=== summary ==="
 echo "openvpn   : ${OPENVPN_FAILED:+FAILED}${OPENVPN_FAILED:-OK}"
 echo "dropbear  : ${DROPBEAR_FAILED:+FAILED}${DROPBEAR_FAILED:-OK}"
+echo "xray      : ${XRAY_FAILED:+FAILED}${XRAY_FAILED:-OK}"
 echo "squid     : ${SQUID_FAILED:+FAILED}${SQUID_FAILED:-OK}"
 echo
 echo "artifacts in: ${OUT}/"
