@@ -1,157 +1,374 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import {
+  Button, Card, Col, ConfigProvider, Dropdown, Layout,
+  Row, Space, Statistic, Switch, Table, Tag, theme as antdTheme, message,
+  type MenuProps, type TableColumnsType,
+} from 'antd'
+import {
+  ArrowDownOutlined, ArrowUpOutlined,
+  DeleteOutlined, EditOutlined, ExportOutlined, ImportOutlined,
+  InfoCircleOutlined, MenuOutlined, PieChartOutlined,
+  PlusOutlined, QrcodeOutlined, ReloadOutlined, TeamOutlined,
+} from '@ant-design/icons'
+import AppSidebar from '@/layouts/AppSidebar'
 import { API, type Inbound } from '@/lib/api'
-import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { Dialog } from '@/components/ui/dialog'
-import { Input, Label } from '@/components/ui/input'
-import { Table, THead, TBody, TR, TH, TD } from '@/components/ui/table'
+import { useTheme } from '@/hooks/useTheme'
+import { InboundForm, type InboundFormValue } from '@/components/InboundForm'
+import { Modal, Upload, Radio } from 'antd'
+import { formatBytes } from '@/pages/index/formatters'
+import InboundInfoModal from '@/pages/inbounds/InboundInfoModal'
 
-// Inbounds page: full list + create + delete. Editing an existing
-// inbound reuses the same dialog with pre-filled values.
-const protocols = [
-  'vless', 'vmess', 'trojan', 'shadowsocks', 'hysteria2',
-  'wireguard', 'http', 'socks', 'dokodemo-door',
-]
+// InboundsPage — 3x-ui-shaped list view. Top row has three stat tiles
+// (upload / download / online), body is a Card wrapping an Ant Table
+// with the same columns 3x-ui exposes plus a per-row actions dropdown.
+//
+// The dialog for create/edit reuses our existing InboundForm — it's
+// the protocol-aware form we built earlier and matches 3x-ui's field
+// set for VLESS/VMess/Trojan/etc.
 
-export default function Inbounds() {
-  const [rows, setRows] = useState<Inbound[]>([])
-  const [err, setErr] = useState<string | null>(null)
-  const [dlgOpen, setDlgOpen] = useState(false)
-  const [editing, setEditing] = useState<Inbound | null>(null)
+const protocolColor: Record<string, string> = {
+  vless:       'geekblue',
+  vmess:       'blue',
+  trojan:      'volcano',
+  shadowsocks: 'purple',
+  hysteria2:   'magenta',
+  wireguard:   'cyan',
+  http:        'gold',
+  socks:       'orange',
+  'dokodemo-door': 'default',
+}
+
+export default function InboundsPage() {
+  const { isDark } = useTheme()
   const navigate = useNavigate()
+  const [messageApi, contextHolder] = message.useMessage()
 
-  const [form, setForm] = useState({
-    tag: '', protocol: 'vless', listen: '0.0.0.0', port: 443, remark: '',
-    settings: '{}', stream: '{"network":"tcp","security":"reality"}',
-  })
+  const [rows, setRows] = useState<Inbound[]>([])
+  const [selectedKeys, setSelectedKeys] = useState<number[]>([])
+  const [loading, setLoading] = useState(true)
+  const [dialogOpen, setDialogOpen] = useState(false)
+  const [editing, setEditing] = useState<Inbound | null>(null)
+  const [infoRow, setInfoRow] = useState<Inbound | null>(null)
+  const [importOpen, setImportOpen] = useState(false)
+  const [importMode, setImportMode] = useState<'merge' | 'replace'>('merge')
 
-  async function refresh() {
-    try { setRows(await API.inbounds.list()) }
-    catch (e) { setErr(String(e)) }
-  }
-  useEffect(() => { refresh() }, [])
-
-  function openCreate() {
-    setEditing(null)
-    setForm({ tag: '', protocol: 'vless', listen: '0.0.0.0', port: 443, remark: '', settings: '{}', stream: '{"network":"tcp","security":"reality"}' })
-    setDlgOpen(true)
-  }
-
-  function openEdit(row: Inbound) {
-    setEditing(row)
-    setForm({
-      tag: row.tag,
-      protocol: row.protocol,
-      listen: row.listen,
-      port: row.port,
-      remark: row.remark,
-      settings: JSON.stringify(row.settings, null, 2),
-      stream: JSON.stringify(row.stream, null, 2),
-    })
-    setDlgOpen(true)
-  }
-
-  async function save() {
+  const refresh = useCallback(async () => {
     try {
-      const body = {
-        tag: form.tag,
-        protocol: form.protocol,
-        listen: form.listen,
-        port: Number(form.port),
-        remark: form.remark,
-        settings: JSON.parse(form.settings || '{}'),
-        stream: JSON.parse(form.stream || '{}'),
+      setLoading(true)
+      setRows((await API.inbounds.list()) ?? [])
+    } catch (e) {
+      messageApi.error(String(e))
+    } finally { setLoading(false) }
+  }, [messageApi])
+
+  useEffect(() => { refresh() }, [refresh])
+
+  const totals = useMemo(() => rows.reduce(
+    (a, r) => ({ up: a.up + r.total_up, down: a.down + r.total_down }),
+    { up: 0, down: 0 },
+  ), [rows])
+
+  const toggleEnable = useCallback(async (row: Inbound, next: boolean) => {
+    try {
+      await API.inbounds.update(row.id, {
+        tag: row.tag, protocol: row.protocol, listen: row.listen, port: row.port,
+        settings: row.settings, stream: row.stream, remark: row.remark,
+        enabled: next,
+      } as any)
+      refresh()
+    } catch (e) { messageApi.error(String(e)) }
+  }, [refresh, messageApi])
+
+  const rowMenu = (_row: Inbound): MenuProps['items'] => [
+    { key: 'edit',   icon: <EditOutlined />,     label: 'แก้ไข' },
+    { key: 'info',   icon: <InfoCircleOutlined />, label: 'รายละเอียด' },
+    { key: 'qr',     icon: <QrcodeOutlined />,   label: 'QR / Share' },
+    { key: 'clients', icon: <TeamOutlined />,    label: 'จัดการ clients' },
+    { type: 'divider' },
+    { key: 'reset',  icon: <ReloadOutlined />,   label: 'Reset traffic' },
+    { key: 'delete', icon: <DeleteOutlined />,   label: 'ลบ', danger: true },
+  ] as MenuProps['items']
+
+  const onRowAction = useCallback(async ({ key }: { key: string }, row: Inbound) => {
+    switch (key) {
+      case 'edit': setEditing(row); setDialogOpen(true); break
+      case 'clients': navigate(`/inbounds/${row.id}/clients`); break
+      case 'delete':
+        if (!confirm(`ลบ inbound "${row.tag}"?`)) return
+        await API.inbounds.remove(row.id)
+        messageApi.success('deleted')
+        refresh()
+        break
+      case 'reset':
+        if (!confirm(`Reset traffic ของ "${row.tag}" ให้เป็น 0?`)) return
+        try {
+          await API.inbounds.resetTraffic(row.id)
+          messageApi.success('traffic reset')
+          refresh()
+        } catch (e) { messageApi.error(String(e)) }
+        break
+      case 'info':
+      case 'qr':
+        setInfoRow(row)
+        break
+    }
+  }, [messageApi, refresh, navigate])
+
+  const bulkDelete = useCallback(async () => {
+    if (selectedKeys.length === 0) return
+    if (!confirm(`ลบ inbound ${selectedKeys.length} รายการ?`)) return
+    await Promise.all(selectedKeys.map((id) => API.inbounds.remove(id)))
+    messageApi.success(`deleted ${selectedKeys.length}`)
+    setSelectedKeys([])
+    refresh()
+  }, [selectedKeys, messageApi, refresh])
+
+  const columns: TableColumnsType<Inbound> = useMemo(() => [
+    {
+      title: '#', dataIndex: 'id', width: 72, fixed: 'left',
+    },
+    {
+      title: 'Enable', dataIndex: 'enabled', width: 90, align: 'center',
+      render: (v: boolean, row) => (
+        <Switch checked={v} onChange={(next) => toggleEnable(row, next)} />
+      ),
+    },
+    {
+      title: 'Remark', dataIndex: 'tag',
+      render: (_: unknown, row) => (
+        <Space direction="vertical" size={2}>
+          <span style={{ fontWeight: 500 }}>{row.tag}</span>
+          {row.remark && <span style={{ fontSize: 12, opacity: 0.65 }}>{row.remark}</span>}
+        </Space>
+      ),
+    },
+    {
+      title: 'Protocol', dataIndex: 'protocol', width: 120,
+      render: (v: string) => <Tag color={protocolColor[v] || 'default'}>{v}</Tag>,
+    },
+    {
+      title: 'Port', dataIndex: 'port', width: 110,
+      render: (v: number, row) => (
+        <span style={{ fontVariantNumeric: 'tabular-nums' }}>
+          {row.listen === '0.0.0.0' ? '' : `${row.listen}:`}{v}
+        </span>
+      ),
+    },
+    {
+      title: 'Traffic ↑↓', width: 200,
+      render: (_: unknown, row) => (
+        <Space direction="vertical" size={0}>
+          <span><ArrowUpOutlined style={{ color: '#5cadff' }} /> {formatBytes(row.total_up)}</span>
+          <span><ArrowDownOutlined style={{ color: '#52c41a' }} /> {formatBytes(row.total_down)}</span>
+        </Space>
+      ),
+    },
+    {
+      title: 'Created', dataIndex: 'created_at', width: 140,
+      render: (v: number) => v ? new Date(v * 1000).toLocaleDateString() : '—',
+    },
+    {
+      title: '', width: 60, fixed: 'right', align: 'center',
+      render: (_: unknown, row) => (
+        <Dropdown menu={{ items: rowMenu(row), onClick: (info) => onRowAction(info, row) }}
+                  trigger={['click']} placement="bottomRight">
+          <Button size="small" icon={<MenuOutlined />} />
+        </Dropdown>
+      ),
+    },
+  ], [onRowAction, toggleEnable])
+
+  const doExport = useCallback(() => {
+    // Full-page navigate so the browser downloads the file with the
+    // Content-Disposition header the server sets.
+    window.location.href = API.inbounds.exportURL()
+  }, [])
+
+  const doResetAll = useCallback(async () => {
+    if (!confirm(`Reset traffic ของ ${rows.length} inbounds ทั้งหมด?`)) return
+    try {
+      const r = await API.inbounds.resetAllTraffic()
+      messageApi.success(`reset ${r.count} inbounds`)
+      if (Object.keys(r.failed).length) {
+        messageApi.warning(`${Object.keys(r.failed).length} failed`)
       }
-      if (editing) await API.inbounds.update(editing.id, body)
-      else await API.inbounds.create(body)
-      setDlgOpen(false)
-      await refresh()
-    } catch (e) { setErr(String(e)) }
+      refresh()
+    } catch (e) { messageApi.error(String(e)) }
+  }, [rows.length, messageApi, refresh])
+
+  const generalActions: MenuProps = {
+    items: [
+      { key: 'import', icon: <ImportOutlined />, label: 'Import inbounds…' },
+      { key: 'export', icon: <ExportOutlined />, label: 'Export JSON' },
+      { type: 'divider' },
+      { key: 'reset',  icon: <ReloadOutlined />, label: 'Reset all traffic', danger: true },
+    ],
+    onClick: ({ key }) => {
+      if (key === 'import') setImportOpen(true)
+      if (key === 'export') doExport()
+      if (key === 'reset') doResetAll()
+    },
   }
 
-  async function remove(id: number) {
-    if (!confirm('ลบ inbound นี้?')) return
-    await API.inbounds.remove(id).catch((e) => setErr(String(e)))
-    await refresh()
+  async function handleSave(v: InboundFormValue) {
+    try {
+      if (editing) await API.inbounds.update(editing.id, v)
+      else await API.inbounds.create(v)
+      messageApi.success(editing ? 'updated' : 'created')
+      setDialogOpen(false)
+      refresh()
+    } catch (e) { messageApi.error(String(e)) }
   }
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-semibold">Inbounds</h1>
-        <Button onClick={openCreate}>+ สร้างใหม่</Button>
-      </div>
-      {err && <div className="text-sm text-destructive">{err}</div>}
+    <ConfigProvider theme={{
+      algorithm: isDark ? antdTheme.darkAlgorithm : antdTheme.defaultAlgorithm,
+      token: { colorPrimary: '#1677ff', borderRadius: 6 },
+    }}>
+      {contextHolder}
+      <Layout style={{ minHeight: '100vh' }}>
+        <AppSidebar />
+        <Layout>
+          <Layout.Content style={{ padding: 16 }}>
+            <Row gutter={[16, 12]}>
+              <Col xs={24} md={8}>
+                <Card><Statistic
+                  title="Total upload"
+                  value={formatBytes(totals.up)}
+                  prefix={<ArrowUpOutlined style={{ color: '#5cadff' }} />}
+                /></Card>
+              </Col>
+              <Col xs={24} md={8}>
+                <Card><Statistic
+                  title="Total download"
+                  value={formatBytes(totals.down)}
+                  prefix={<ArrowDownOutlined style={{ color: '#52c41a' }} />}
+                /></Card>
+              </Col>
+              <Col xs={24} md={8}>
+                <Card><Statistic
+                  title="Inbounds"
+                  value={`${rows.filter((r) => r.enabled).length} / ${rows.length}`}
+                  prefix={<PieChartOutlined />}
+                /></Card>
+              </Col>
 
-      <Card>
-        <CardHeader><CardTitle>ทั้งหมด ({rows.length})</CardTitle></CardHeader>
-        <CardContent>
-          <Table>
-            <THead>
-              <TR>
-                <TH>Tag</TH><TH>Protocol</TH><TH>Port</TH><TH>Traffic</TH><TH></TH>
-              </TR>
-            </THead>
-            <TBody>
-              {rows.map((r) => (
-                <TR key={r.id}>
-                  <TD className="font-medium">{r.tag}</TD>
-                  <TD>{r.protocol}</TD>
-                  <TD>{r.listen}:{r.port}</TD>
-                  <TD className="text-muted-foreground text-xs">
-                    ↑ {r.total_up.toLocaleString()} B · ↓ {r.total_down.toLocaleString()} B
-                  </TD>
-                  <TD className="text-right space-x-2">
-                    <Button size="sm" variant="secondary" onClick={() => navigate(`/inbounds/${r.id}/clients`)}>Clients</Button>
-                    <Button size="sm" variant="outline" onClick={() => openEdit(r)}>แก้ไข</Button>
-                    <Button size="sm" variant="destructive" onClick={() => remove(r.id)}>ลบ</Button>
-                  </TD>
-                </TR>
-              ))}
-            </TBody>
-          </Table>
-        </CardContent>
-      </Card>
+              <Col span={24}>
+                <Card
+                  hoverable
+                  title={
+                    <Space>
+                      <Button type="primary" icon={<PlusOutlined />}
+                              onClick={() => { setEditing(null); setDialogOpen(true) }}>
+                        Add inbound
+                      </Button>
+                      <Dropdown trigger={['click']} menu={generalActions}>
+                        <Button icon={<MenuOutlined />}>Actions</Button>
+                      </Dropdown>
+                      {selectedKeys.length > 0 && (
+                        <>
+                          <Tag color="blue" closable onClose={() => setSelectedKeys([])}
+                               style={{ marginInlineEnd: 0 }}>
+                            {selectedKeys.length} selected
+                          </Tag>
+                          <Button danger icon={<DeleteOutlined />} onClick={bulkDelete}>
+                            Delete
+                          </Button>
+                        </>
+                      )}
+                    </Space>
+                  }
+                >
+                  <Table<Inbound>
+                    rowKey="id"
+                    size="middle"
+                    loading={loading}
+                    columns={columns}
+                    dataSource={rows}
+                    rowSelection={{
+                      selectedRowKeys: selectedKeys,
+                      onChange: (keys) => setSelectedKeys(keys as number[]),
+                    }}
+                    pagination={{ pageSize: 20, showSizeChanger: false, hideOnSinglePage: true }}
+                    scroll={{ x: 900 }}
+                  />
+                </Card>
+              </Col>
+            </Row>
+          </Layout.Content>
+        </Layout>
+      </Layout>
 
-      <Dialog
-        open={dlgOpen}
-        onClose={() => setDlgOpen(false)}
-        title={editing ? `แก้ไข ${editing.tag}` : 'สร้าง Inbound ใหม่'}
-        wide
-        footer={
-          <>
-            <Button variant="outline" onClick={() => setDlgOpen(false)}>ยกเลิก</Button>
-            <Button onClick={save}>บันทึก</Button>
-          </>
-        }
+      <Modal
+        open={dialogOpen}
+        onCancel={() => setDialogOpen(false)}
+        title={editing ? `Edit ${editing.tag}` : 'New inbound'}
+        footer={null}
+        width={760}
+        destroyOnHidden
       >
-        <div className="grid grid-cols-2 gap-3">
-          <div className="space-y-1"><Label>Tag</Label>
-            <Input value={form.tag} onChange={(e) => setForm({ ...form, tag: e.target.value })} /></div>
-          <div className="space-y-1"><Label>Protocol</Label>
-            <select className="h-9 w-full rounded-md border border-input bg-transparent px-3 text-sm"
-                    value={form.protocol}
-                    onChange={(e) => setForm({ ...form, protocol: e.target.value })}>
-              {protocols.map((p) => <option key={p} value={p}>{p}</option>)}
-            </select>
-          </div>
-          <div className="space-y-1"><Label>Listen</Label>
-            <Input value={form.listen} onChange={(e) => setForm({ ...form, listen: e.target.value })} /></div>
-          <div className="space-y-1"><Label>Port</Label>
-            <Input type="number" value={form.port} onChange={(e) => setForm({ ...form, port: Number(e.target.value) })} /></div>
-          <div className="space-y-1 col-span-2"><Label>Remark</Label>
-            <Input value={form.remark} onChange={(e) => setForm({ ...form, remark: e.target.value })} /></div>
-          <div className="space-y-1 col-span-2"><Label>settings (JSON)</Label>
-            <textarea className="w-full h-24 rounded-md border border-input bg-transparent px-3 py-2 text-sm font-mono"
-                      value={form.settings}
-                      onChange={(e) => setForm({ ...form, settings: e.target.value })} /></div>
-          <div className="space-y-1 col-span-2"><Label>stream (JSON)</Label>
-            <textarea className="w-full h-24 rounded-md border border-input bg-transparent px-3 py-2 text-sm font-mono"
-                      value={form.stream}
-                      onChange={(e) => setForm({ ...form, stream: e.target.value })} /></div>
+        {/* keyed remount is a belt on top of destroyOnHidden's braces
+            so switching from create → edit → different-edit always
+            gets a clean form even if antd's animation defers unmount. */}
+        <InboundForm
+          key={editing?.id ?? 'new'}
+          initial={editing ?? undefined}
+          onCancel={() => setDialogOpen(false)}
+          onSubmit={handleSave}
+        />
+      </Modal>
+
+      <InboundInfoModal
+        open={!!infoRow}
+        inbound={infoRow}
+        onClose={() => setInfoRow(null)}
+      />
+
+      <Modal
+        open={importOpen}
+        onCancel={() => setImportOpen(false)}
+        title="Import inbounds"
+        footer={null}
+        width={520}
+        destroyOnHidden
+      >
+        <div style={{ marginBottom: 12 }}>
+          Upload a JSON file exported from a HEXPLUS panel
+          (or a copy-paste of the JSON payload).
         </div>
-      </Dialog>
-    </div>
+        <Radio.Group value={importMode} onChange={(e) => setImportMode(e.target.value)}
+                     style={{ marginBottom: 12 }}>
+          <Radio.Button value="merge">Skip conflicts</Radio.Button>
+          <Radio.Button value="replace">Replace conflicts</Radio.Button>
+        </Radio.Group>
+        <Upload.Dragger
+          accept="application/json,.json"
+          multiple={false}
+          maxCount={1}
+          showUploadList={false}
+          beforeUpload={async (file) => {
+            try {
+              const text = await file.text()
+              const env = JSON.parse(text)
+              const r = await API.inbounds.import(env, importMode)
+              messageApi.success(`imported ${r.inserted}, skipped ${r.skipped}`)
+              if (Object.keys(r.failed).length) {
+                messageApi.warning(`${Object.keys(r.failed).length} failed`)
+              }
+              setImportOpen(false)
+              refresh()
+            } catch (e) { messageApi.error(String(e)) }
+            return false
+          }}
+        >
+          <p style={{ fontSize: 32, margin: 8 }}><ImportOutlined /></p>
+          <p>Click or drag a .json file to import</p>
+          <p style={{ opacity: 0.6, fontSize: 12 }}>
+            Envelope: <code>{'{ version, inbounds: [...] }'}</code>
+          </p>
+        </Upload.Dragger>
+      </Modal>
+    </ConfigProvider>
   )
 }

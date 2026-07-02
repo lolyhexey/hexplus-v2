@@ -2,49 +2,106 @@
 @tailwind components;
 @tailwind utilities;
 
-/* shadcn design tokens — light + dark palettes. Values match the
-   shadcn "slate" preset so the look is familiar to anyone who has
-   used ui.shadcn.com dashboards. */
+/* 3x-ui-style palette: Ant Design dark navy sider (#001529),
+   near-black body (#141414), Ant blue (#1677ff) primary. Light mode
+   keeps a similar hue relationship so admins on both themes get the
+   same visual system, not two disconnected looks. */
 @layer base {
   :root {
-    --background: 0 0% 100%;
-    --foreground: 222.2 84% 4.9%;
+    --background: 210 20% 98%;
+    --foreground: 222 20% 14%;
     --card: 0 0% 100%;
-    --card-foreground: 222.2 84% 4.9%;
-    --primary: 222.2 47.4% 11.2%;
-    --primary-foreground: 210 40% 98%;
-    --secondary: 210 40% 96.1%;
-    --secondary-foreground: 222.2 47.4% 11.2%;
-    --muted: 210 40% 96.1%;
-    --muted-foreground: 215.4 16.3% 46.9%;
-    --accent: 210 40% 96.1%;
-    --accent-foreground: 222.2 47.4% 11.2%;
-    --destructive: 0 84.2% 60.2%;
-    --destructive-foreground: 210 40% 98%;
-    --border: 214.3 31.8% 91.4%;
-    --input: 214.3 31.8% 91.4%;
-    --ring: 222.2 84% 4.9%;
-    --radius: 0.5rem;
+    --card-foreground: 222 20% 14%;
+    --primary: 215 100% 54%;              /* #1677ff — Ant blue */
+    --primary-foreground: 0 0% 100%;
+    --secondary: 214 32% 91%;
+    --secondary-foreground: 222 47% 11%;
+    --muted: 214 32% 95%;
+    --muted-foreground: 220 10% 46%;
+    --accent: 214 40% 94%;
+    --accent-foreground: 222 47% 11%;
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 0 0% 100%;
+    --success: 142 71% 45%;               /* #22c55e for on-state pill */
+    --success-foreground: 0 0% 100%;
+    --border: 214 24% 90%;
+    --input: 214 24% 90%;
+    --ring: 215 100% 54%;
+    --radius: 0.375rem;                    /* 3x-ui uses slightly tighter corners */
+    --sider: 213 100% 8%;                  /* #001529 sider even in light mode */
+    --sider-foreground: 0 0% 100%;
+    --sider-muted: 213 25% 66%;
+    --sider-active: 215 100% 54%;
   }
   .dark {
-    --background: 222.2 84% 4.9%;
-    --foreground: 210 40% 98%;
-    --card: 222.2 84% 4.9%;
-    --card-foreground: 210 40% 98%;
-    --primary: 210 40% 98%;
-    --primary-foreground: 222.2 47.4% 11.2%;
-    --secondary: 217.2 32.6% 17.5%;
-    --secondary-foreground: 210 40% 98%;
-    --muted: 217.2 32.6% 17.5%;
-    --muted-foreground: 215 20.2% 65.1%;
-    --accent: 217.2 32.6% 17.5%;
-    --accent-foreground: 210 40% 98%;
-    --destructive: 0 62.8% 30.6%;
-    --destructive-foreground: 210 40% 98%;
-    --border: 217.2 32.6% 17.5%;
-    --input: 217.2 32.6% 17.5%;
-    --ring: 212.7 26.8% 83.9%;
+    --background: 0 0% 8%;                 /* #141414 body */
+    --foreground: 0 0% 92%;
+    --card: 0 0% 12%;                      /* #1f1f1f card */
+    --card-foreground: 0 0% 92%;
+    --primary: 215 100% 62%;               /* slightly brighter blue on dark */
+    --primary-foreground: 0 0% 100%;
+    --secondary: 0 0% 18%;
+    --secondary-foreground: 0 0% 92%;
+    --muted: 0 0% 15%;
+    --muted-foreground: 0 0% 62%;
+    --accent: 0 0% 20%;
+    --accent-foreground: 0 0% 92%;
+    --destructive: 0 72% 51%;
+    --destructive-foreground: 0 0% 100%;
+    --success: 142 71% 45%;
+    --success-foreground: 0 0% 100%;
+    --border: 0 0% 20%;
+    --input: 0 0% 20%;
+    --ring: 215 100% 62%;
+    --sider: 213 100% 8%;                  /* same sider for consistency */
+    --sider-foreground: 0 0% 100%;
+    --sider-muted: 213 20% 60%;
+    --sider-active: 215 100% 62%;
   }
   * { @apply border-border; }
-  body { @apply bg-background text-foreground; font-family: system-ui, -apple-system, "Sarabun", sans-serif; }
+  html { color-scheme: dark; }
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen,
+      Ubuntu, Cantarell, 'Sarabun', 'Noto Sans Thai', sans-serif;
+    font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11';
+  }
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb {
+    background: hsl(var(--muted-foreground) / 0.25);
+    border-radius: 4px;
+  }
+  ::-webkit-scrollbar-thumb:hover { background: hsl(var(--muted-foreground) / 0.45); }
+}
+
+/* Status pill — reused across every list to render enabled/disabled/
+   pending states with the same visual language. */
+@layer components {
+  .pill {
+    @apply inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-xs font-medium;
+  }
+  .pill-on {
+    @apply pill;
+    background: hsl(var(--success) / 0.15);
+    color: hsl(var(--success));
+  }
+  .pill-off {
+    @apply pill bg-muted text-muted-foreground;
+  }
+  .pill-warn {
+    @apply pill;
+    background: hsl(38 92% 50% / 0.15);
+    color: hsl(38 92% 50%);
+  }
+  .pill-info {
+    @apply pill;
+    background: hsl(var(--primary) / 0.15);
+    color: hsl(var(--primary));
+  }
+  /* Dot indicator used inline with service names in the sidebar and
+     top-bar. Solid green for active, muted grey for inactive. */
+  .dot { @apply inline-block h-1.5 w-1.5 rounded-full; }
+  .dot-on { @apply dot; background: hsl(var(--success)); }
+  .dot-off { @apply dot bg-muted-foreground/40; }
 }

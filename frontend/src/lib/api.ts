@@ -70,6 +70,16 @@ export const API = {
     api<{ ok: boolean }>('login', { method: 'POST', body: JSON.stringify({ username, password }) }),
   logout: () => api<{ ok: boolean }>('logout', { method: 'POST' }),
 
+  server: {
+    // 3x-ui-compatible envelope: { success, obj }
+    status: () => api<{ success: boolean; obj: ServerStatus }>('api/server/status'),
+    xrayConfig: () => api<{ success: boolean; obj: string }>('api/server/xray/config'),
+    xrayRestart: () => api<{ success: boolean }>('api/server/xray/restart', { method: 'POST' }),
+    xrayStop: () => api<{ success: boolean }>('api/server/xray/stop', { method: 'POST' }),
+    xrayLog: (lines = 200) =>
+      api<{ success: boolean; obj: string }>(`api/server/xray/log?lines=${lines}`),
+  },
+
   inbounds: {
     list: () => api<Inbound[]>('api/inbounds'),
     get: (id: number) => api<Inbound>(`api/inbounds/${id}`),
@@ -79,6 +89,18 @@ export const API = {
       api<{ id: number }>(`api/inbounds/${id}`, { method: 'PUT', body: JSON.stringify(body) }),
     remove: (id: number) =>
       api<{ id: number }>(`api/inbounds/${id}`, { method: 'DELETE' }),
+    resetTraffic: (id: number) =>
+      api<{ id: number; ok: boolean }>(`api/inbounds/${id}/reset-traffic`, { method: 'POST' }),
+    resetAllTraffic: () =>
+      api<{ count: number; failed: Record<string, string> }>('api/inbounds/reset-all-traffic', {
+        method: 'POST',
+      }),
+    exportURL: () => 'api/inbounds/export',
+    import: (envelope: unknown, mode: 'merge' | 'replace' | 'skip' = 'merge') =>
+      api<{ inserted: number; skipped: number; failed: Record<string, string> }>(
+        `api/inbounds/import?mode=${mode}`,
+        { method: 'POST', body: JSON.stringify(envelope) },
+      ),
   },
 
   clients: {
@@ -128,6 +150,75 @@ export const API = {
     renew: (id: number) => api<{ id: number; not_after: number }>(`api/certs/${id}/renew`, { method: 'POST' }),
     remove: (id: number) => api<{ id: number }>(`api/certs/${id}`, { method: 'DELETE' }),
   },
+
+  probe: {
+    port: (port: number, proto: 'tcp' | 'udp' = 'tcp') =>
+      api<{ port: number; proto: string; in_use: boolean }>(
+        `api/probe/port?port=${port}&proto=${proto}`,
+      ),
+  },
+
+  reality: {
+    scan: (targets: string[]) =>
+      api<{ success: boolean; results: RealityScanResult[] }>('api/reality/scan', {
+        method: 'POST',
+        body: JSON.stringify({ targets }),
+      }),
+  },
+
+  settings: {
+    get: () => api<Settings>('api/settings'),
+    update: (body: Partial<Pick<Settings, 'listen_addr' | 'port' | 'subscription_enabled'>>) =>
+      api<{ ok: boolean; requires_restart: boolean }>('api/settings', {
+        method: 'PUT',
+        body: JSON.stringify(body),
+      }),
+    changePassword: (body: { current_password: string; new_password: string; new_username?: string }) =>
+      api<{ ok: boolean; username: string }>('api/settings/password', {
+        method: 'POST',
+        body: JSON.stringify(body),
+      }),
+    rotatePrefix: () =>
+      api<{ ok: boolean; url_prefix: string; requires_restart: boolean }>(
+        'api/settings/url-prefix/rotate',
+        { method: 'POST' },
+      ),
+  },
+}
+
+// ServerStatus mirrors 3x-ui's Status shape so IndexPage components
+// can be ported nearly verbatim.
+export interface ServerStatus {
+  cpu: Gauge
+  cpuCores: number
+  logicalPro: number
+  cpuSpeedMhz: number
+  mem: MemGauge
+  swap: MemGauge
+  disk: MemGauge
+  xray: { state: string; version: string; errorMsg: string }
+  uptime: number
+  loads: [number, number, number]
+  tcpCount: number
+  udpCount: number
+  netIO: { up: number; down: number }
+  netTraffic: { sent: number; recv: number }
+  publicIP: { v4: string; v6: string }
+  appStats: { threads: number; mem: number; uptime: number }
+  osVersion: string
+}
+
+export interface Gauge { percent: number; color: string }
+export interface MemGauge { current: number; total: number; percent: number; color: string }
+
+export interface Settings {
+  listen_addr: string
+  port: number
+  url_prefix: string
+  subscription_enabled: boolean
+  admin_username: string
+  xray_version: string
+  panel_version: string
 }
 
 // Resource types — mirror the Go View structs in api_*.go.
@@ -190,6 +281,15 @@ export interface Rule {
   enabled: boolean
   created_at: number
   updated_at: number
+}
+
+export interface RealityScanResult {
+  host: string
+  ok: boolean
+  reason?: string
+  tls_version?: string
+  alpn?: string
+  rtt_ms?: number
 }
 
 export interface Cert {

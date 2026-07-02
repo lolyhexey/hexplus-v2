@@ -36,6 +36,16 @@ export default {
           DEFAULT: 'hsl(var(--card))',
           foreground: 'hsl(var(--card-foreground))',
         },
+        success: {
+          DEFAULT: 'hsl(var(--success))',
+          foreground: 'hsl(var(--success-foreground))',
+        },
+        sider: {
+          DEFAULT: 'hsl(var(--sider))',
+          foreground: 'hsl(var(--sider-foreground))',
+          muted: 'hsl(var(--sider-muted))',
+          active: 'hsl(var(--sider-active))',
+        },
       },
       borderRadius: {
         lg: 'var(--radius)',
