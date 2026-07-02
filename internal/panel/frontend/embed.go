@@ -42,7 +42,18 @@ func Handler(urlPrefix string) http.Handler {
 		// Serve index.html for any path that doesn't correspond to an
 		// on-disk file. This is the standard SPA fallback for a
 		// react-router BrowserRouter.
-		f, err := sub.Open(strings.TrimPrefix(r.URL.Path, "/"))
+		//
+		// The "/" case has to bypass the sub.Open probe: fs.FS treats
+		// "" as an invalid name and returns "invalid argument" instead
+		// of fs.ErrNotExist, which our fall-through above would then
+		// 500 on. Send it straight to serveIndex so the rewritten
+		// <base href> lands in the browser.
+		name := strings.TrimPrefix(r.URL.Path, "/")
+		if name == "" {
+			serveIndex(w, sub, basePath)
+			return
+		}
+		f, err := sub.Open(name)
 		if err == nil {
 			_ = f.Close()
 			fileSrv.ServeHTTP(w, r)
