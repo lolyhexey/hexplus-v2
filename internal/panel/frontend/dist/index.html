@@ -1,11 +1,20 @@
 <!doctype html>
-<html lang="th"><head><meta charset="UTF-8" /><title>HEXPLUS Panel</title><base href="/" id="hexplus-base" /></head>
-<body style="font-family: system-ui; max-width: 640px; margin: 2rem auto; padding: 0 1rem;">
-<h1>HEXPLUS Panel — frontend bundle missing</h1>
-<p>Backend is running, but the React bundle was not built.</p>
-<p>Run on the dev machine before <code>go build</code>:</p>
-<pre>cd frontend
-pnpm install
-pnpm build</pre>
-<p>Then rebuild the hexplus binary. See the README for details.</p>
-</body></html>
+<html lang="th">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>HEXPLUS Panel</title>
+    <!--
+      base href is rewritten at request time by the Go handler so the
+      SPA loads correctly under any URL prefix (the panel picks a
+      random one at install). Leave as "/" for dev; production build
+      gets a real value injected.
+    -->
+    <base href="/" id="hexplus-base" />
+    <script type="module" crossorigin src="./assets/index-B7EbyZl1.js"></script>
+    <link rel="stylesheet" crossorigin href="./assets/index-io0Uwo2J.css">
+  </head>
+  <body class="bg-background text-foreground">
+    <div id="root"></div>
+  </body>
+</html>

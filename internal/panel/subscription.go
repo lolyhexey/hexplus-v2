@@ -43,8 +43,35 @@ func (s *Server) handleSubscription(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	host := subscriptionHost(r)
+	format := strings.ToLower(r.URL.Query().Get("type"))
 
-	link, err := xray.ShareForClient(inbound, streamJSON, client, subscriptionHost(r), "")
+	// Clash / Sing-box branch: build structured config from the same
+	// (inbound, client) pair. Not every protocol is expressible in
+	// those formats — we return 200 with an empty proxies block so
+	// the client app doesn't retry-storm.
+	if format == "clash" || format == "clash-meta" {
+		w.Header().Set("Content-Type", "text/yaml; charset=utf-8")
+		w.Header().Set("Profile-Title", "HEXPLUS Panel")
+		w.Header().Set("Profile-Update-Interval", "24")
+		var proxies []clashProxy
+		if p := buildClashProxy(inbound, streamJSON, client, host); p != nil {
+			proxies = []clashProxy{p}
+		}
+		_, _ = w.Write([]byte(renderClashYAML(proxies, "HEXPLUS Panel — "+client.Email)))
+		return
+	}
+	if format == "sing-box" || format == "singbox" {
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		var outbounds []map[string]any
+		if o := buildSingBoxOutbound(inbound, streamJSON, client, host); o != nil {
+			outbounds = []map[string]any{o}
+		}
+		_, _ = w.Write([]byte(renderSingBoxJSON(outbounds)))
+		return
+	}
+
+	link, err := xray.ShareForClient(inbound, streamJSON, client, host, "")
 	if err != nil || link == "" {
 		// Nothing shareable (e.g. WireGuard) — still return 200 so the
 		// client app doesn't retry-storm, just serve an empty body.
@@ -98,7 +125,8 @@ func (s *Server) subscriptionLookup(token string) (xray.Client, xray.InboundFrom
 
 // writePlainSub emits the link list in the shape ?type= asked for.
 // Default is base64 (the v2ray/v2rayN convention); plain returns the
-// raw newline list; anything else = 501.
+// raw newline list. clash/sing-box render structured formats via
+// helpers in sub_formats.go.
 func writePlainSub(w http.ResponseWriter, r *http.Request, links []string) {
 	body := strings.Join(links, "\n")
 	switch strings.ToLower(r.URL.Query().Get("type")) {
@@ -112,7 +140,7 @@ func writePlainSub(w http.ResponseWriter, r *http.Request, links []string) {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		_, _ = w.Write([]byte(body))
 	default:
-		http.Error(w, "type not implemented (supported: v2ray, plain)", http.StatusNotImplemented)
+		http.Error(w, "type not implemented", http.StatusNotImplemented)
 	}
 }
 

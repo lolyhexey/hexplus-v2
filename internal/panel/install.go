@@ -87,8 +87,9 @@ func Install(opts InstallOptions) (InstallResult, error) {
 	}
 	_ = sqldb.Close()
 
-	// Write systemd units for hexplus-panel + hexplus-xray. The main
-	// install may have already written them; WriteUnitFor is idempotent.
+	// Install both services: extract the xray-core binary (panel has
+	// no separate binary) and write both systemd units. Idempotent —
+	// re-running on a healthy install is a no-op.
 	panelSvc, ok := service.ByName("panel")
 	if !ok {
 		return InstallResult{}, errors.New("service registry missing 'panel'")
@@ -97,11 +98,11 @@ func Install(opts InstallOptions) (InstallResult, error) {
 	if !ok {
 		return InstallResult{}, errors.New("service registry missing 'xray'")
 	}
-	if err := service.WriteUnitFor(panelSvc); err != nil {
-		return InstallResult{}, fmt.Errorf("write panel unit: %w", err)
+	if _, err := service.InstallService(xraySvc); err != nil {
+		return InstallResult{}, fmt.Errorf("install xray: %w", err)
 	}
-	if err := service.WriteUnitFor(xraySvc); err != nil {
-		return InstallResult{}, fmt.Errorf("write xray unit: %w", err)
+	if _, err := service.InstallService(panelSvc); err != nil {
+		return InstallResult{}, fmt.Errorf("install panel: %w", err)
 	}
 
 	return InstallResult{

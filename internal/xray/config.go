@@ -113,5 +113,7 @@ type RoutingRule struct {
 	InboundTag  []string `json:"inboundTag,omitempty"`
 	Domain      []string `json:"domain,omitempty"`
 	IP          []string `json:"ip,omitempty"`
+	Protocol    []string `json:"protocol,omitempty"`
+	Port        string   `json:"port,omitempty"` // "80,443" or "1000-2000"
 	OutboundTag string   `json:"outboundTag,omitempty"`
 }

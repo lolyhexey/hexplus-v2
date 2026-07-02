@@ -202,7 +202,7 @@ func appendUserOutbounds(sqldb *sql.DB, cfg *Config) error {
 // The built-in api rule stays first so it always wins.
 func appendUserRoutingRules(sqldb *sql.DB, cfg *Config) error {
 	rows, err := sqldb.Query(`
-		SELECT outbound_tag, inbound_tag, domains, ips
+		SELECT outbound_tag, inbound_tag, domains, ips, protocols, port_range
 		FROM routing_rules WHERE enabled = 1 ORDER BY priority, id
 	`)
 	if err != nil {
@@ -210,8 +210,8 @@ func appendUserRoutingRules(sqldb *sql.DB, cfg *Config) error {
 	}
 	defer rows.Close()
 	for rows.Next() {
-		var outTag, inTag, domains, ips string
-		if err := rows.Scan(&outTag, &inTag, &domains, &ips); err != nil {
+		var outTag, inTag, domains, ips, protocols, portRange string
+		if err := rows.Scan(&outTag, &inTag, &domains, &ips, &protocols, &portRange); err != nil {
 			return err
 		}
 		rule := RoutingRule{
@@ -223,6 +223,12 @@ func appendUserRoutingRules(sqldb *sql.DB, cfg *Config) error {
 		}
 		rule.Domain = splitNL(domains)
 		rule.IP = splitNL(ips)
+		if protocols != "" {
+			rule.Protocol = splitNL(protocols)
+		}
+		if portRange != "" {
+			rule.Port = portRange
+		}
 		cfg.Routing.Rules = append(cfg.Routing.Rules, rule)
 	}
 	return rows.Err()

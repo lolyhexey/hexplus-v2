@@ -156,6 +156,13 @@ func embeddedBinariesForService(svc Service) ([]binaryDef, error) {
 		return []binaryDef{{"squid", "squid"}}, nil
 	case "dropbear":
 		return []binaryDef{{"dropbearmulti", "dropbearmulti"}}, nil
+	case "xray":
+		return []binaryDef{{"xray", "xray"}}, nil
+	case "panel":
+		// The panel is a hexplus subcommand — no extra binary to plant
+		// on disk. Empty slice so InstallService(panelSvc) still writes
+		// the unit + bootstrap config without erroring.
+		return nil, nil
 	default:
 		return nil, fmt.Errorf("no embed mapping for service %q", svc.Name)
 	}

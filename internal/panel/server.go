@@ -104,10 +104,15 @@ func (s *Server) routes() http.Handler {
 	admin.HandleFunc("/logout", s.handleLogout)
 	admin.HandleFunc("/api/session", s.auth.RequireSession(s.handleSession))
 	s.registerInboundRoutes(admin)
+	s.registerInboundOpRoutes(admin)
 	s.registerClientRoutes(admin)
 	s.registerClientOpRoutes(admin)
 	s.registerRoutingRoutes(admin)
 	s.registerCertRoutes(admin)
+	s.registerSettingsRoutes(admin)
+	s.registerProbeRoutes(admin)
+	s.registerServerRoutes(admin)
+	s.registerRealityRoutes(admin)
 	// The embedded React SPA catches everything not matched above.
 	admin.Handle("/", frontend.Handler(s.cfg.URLPrefix))
 

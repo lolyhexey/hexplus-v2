@@ -73,7 +73,7 @@ func (s *Server) handleInboundList(w http.ResponseWriter, r *http.Request) {
 	}
 	defer rows.Close()
 
-	var out []InboundView
+	out := []InboundView{}
 	for rows.Next() {
 		v, err := scanInbound(rows)
 		if err != nil {

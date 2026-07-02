@@ -60,7 +60,7 @@ func (s *Server) handleOutboundList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer rows.Close()
-	var out []OutboundView
+	out := []OutboundView{}
 	for rows.Next() {
 		var (
 			v      OutboundView
@@ -198,7 +198,7 @@ func (s *Server) handleRuleList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer rows.Close()
-	var out []RuleView
+	out := []RuleView{}
 	for rows.Next() {
 		var (
 			v         RuleView

@@ -76,7 +76,7 @@ func (s *Server) handleClientList(w http.ResponseWriter, r *http.Request) {
 	}
 	defer rows.Close()
 
-	var out []ClientView
+	out := []ClientView{}
 	for rows.Next() {
 		var (
 			v      ClientView
