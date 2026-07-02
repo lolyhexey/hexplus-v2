@@ -16,11 +16,11 @@ Checklist สำหรับงานเพิ่ม V2Ray/Xray Web Panel เข
 
 ---
 
-## Phase 0 — Decisions ที่ยัง pending
+## Phase 0 — Decisions
 
-- [ ] เลือก xray-core version pin (แนะนำ latest stable `v25.x`)
-- [ ] เลือก panel default port (แนะนำ `2053`)
-- [ ] Admin password: random gen โชว์ครั้งเดียว หรือให้ set ตอนติดตั้ง
+- [x] xray-core version pin: **latest tagged release** — `build/Dockerfile.xray` ดึงจาก GitHub tag ล่าสุดตอน build
+- [x] Panel port: **ตั้งได้ผ่านเมนู** (default `2053`) — เมนู hexplus มี option เปลี่ยน port ได้
+- [x] Admin password: **ตั้ง/เปลี่ยนได้ผ่านเมนู** — ตอนติดตั้งครั้งแรก random gen + โชว์, มีเมนู "เปลี่ยน admin password" ทีหลัง
 - [ ] HTTPS: self-signed cert gen เอง (ใช้ `internal/pki`) หรือให้ user แปะ reverse proxy
 - [ ] Multi-node จะทำใน MVP หรือ defer ไปทีหลัง (แนะนำ defer)
 
@@ -208,12 +208,13 @@ Checklist สำหรับงานเพิ่ม V2Ray/Xray Web Panel เข
 
 - [ ] เพิ่ม menu entry ใน `internal/menu/` (option ใหม่หรือ sub-menu)
 - [ ] submenu:
-  - [ ] ติดตั้ง V2Ray Panel
+  - [ ] ติดตั้ง V2Ray Panel (ถามพอร์ต + gen admin password random โชว์ครั้งเดียว)
   - [ ] ถอนการติดตั้ง
-  - [ ] แสดง URL + admin password
+  - [ ] แสดง URL + admin password ปัจจุบัน
   - [ ] restart panel
   - [ ] restart xray
-  - [ ] เปลี่ยน panel port
+  - [ ] เปลี่ยน panel port (validate port ว่าง + update unit + reload)
+  - [ ] เปลี่ยน / reset admin password (bcrypt hash → เขียน DB)
 - [ ] check port ว่างก่อนติดตั้ง (ชนกับ fileserver 82 หรือ OpenVPN?)
 - [ ] เตือนถ้าพอร์ต Xray inbound ชนกับ OpenVPN
 - [ ] auto-open firewall port
