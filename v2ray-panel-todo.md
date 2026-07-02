@@ -16,13 +16,19 @@ Checklist สำหรับงานเพิ่ม V2Ray/Xray Web Panel เข
 
 ---
 
-## Phase 0 — Decisions
+## Phase 0 — Decisions (ล็อคทั้งหมดแล้ว)
 
-- [x] xray-core version pin: **latest tagged release** — `build/Dockerfile.xray` ดึงจาก GitHub tag ล่าสุดตอน build
-- [x] Panel port: **ตั้งได้ผ่านเมนู** (default `2053`) — เมนู hexplus มี option เปลี่ยน port ได้
-- [x] Admin password: **ตั้ง/เปลี่ยนได้ผ่านเมนู** — ตอนติดตั้งครั้งแรก random gen + โชว์, มีเมนู "เปลี่ยน admin password" ทีหลัง
-- [ ] HTTPS: self-signed cert gen เอง (ใช้ `internal/pki`) หรือให้ user แปะ reverse proxy
-- [ ] Multi-node จะทำใน MVP หรือ defer ไปทีหลัง (แนะนำ defer)
+- [x] **xray-core version pin**: latest tagged release — `build/Dockerfile.xray` ดึงจาก GitHub tag ล่าสุดตอน build
+- [x] **Panel port**: ตั้ง/เปลี่ยนได้ผ่านเมนู (default `2053`)
+- [x] **Admin password**: random gen ตอนติดตั้งครั้งแรก + โชว์ครั้งเดียว, มีเมนู "เปลี่ยน admin password" ทีหลัง
+- [x] **HTTPS**: HTTP ล้วน — แนะนำ user ใช้ SSH tunnel หรือ reverse proxy เอง, เมนูโชว์ warning ตอนติดตั้ง
+- [x] **Multi-node**: defer ไป v2 — MVP รองรับ single-node เท่านั้น แต่ DB schema เผื่อ column `node_id` ไว้
+- [x] **Reinstall behavior**: ถาม user ทุกครั้ง — "เก็บ client + inbound เดิมมั้ย?" (Y = migrate DB, N = wipe)
+- [x] **URL prefix**: random path prefix (เช่น `http://IP:2053/xY9kQ2/`) — gen ตอน install, เปลี่ยนได้ผ่านเมนู
+- [x] **Subscription port**: พอร์ตเดียวกับ panel (`:2053/sub/<token>`)
+- [x] **Path config/data**: `/var/lib/hexplus/` ทั้งหมด (panel DB, xray config, backups, cert)
+- [x] **gRPC stats API**: bind `127.0.0.1:10085` เท่านั้น (ไม่ expose ออกนอก)
+- [x] **Xray log**: journald เท่านั้น (`journalctl -u hexplus-xray`) ไม่เขียน log file
 
 ---
 
