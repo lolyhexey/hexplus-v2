@@ -93,6 +93,8 @@ func (s *Server) routes() http.Handler {
 	admin.HandleFunc("/login", s.handleLogin)
 	admin.HandleFunc("/logout", s.handleLogout)
 	admin.HandleFunc("/api/session", s.auth.RequireSession(s.handleSession))
+	s.registerInboundRoutes(admin)
+	s.registerClientRoutes(admin)
 	admin.HandleFunc("/", s.handleRoot) // placeholder — frontend embed replaces this in Phase 10
 
 	if s.cfg.URLPrefix != "" && s.cfg.URLPrefix != "/" {

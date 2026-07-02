@@ -92,51 +92,65 @@ Checklist สำหรับงานเพิ่ม V2Ray/Xray Web Panel เข
 
 ## Phase 3 — Protocol support (Tier 1 - core)
 
-### VLESS + REALITY (priority สูงสุด)
-- [ ] config template สำหรับ VLESS + Reality
-- [ ] gen private/public key คู่ (x25519)
-- [ ] gen shortIds
-- [ ] share link format (`vless://...?security=reality`)
-- [ ] QR code (server-side render, `skip2/go-qrcode`)
+### VLESS + REALITY
+- [x] config builder `proto_vless.go` (VLESSClient + settings + Fallback)
+- [x] Reality privateKey / publicKey (x25519) + shortIds via `keys.go`
+- [x] flow `xtls-rprx-vision` เมื่อ security=reality
+- [x] share link `vless://uuid@host:port?...&security=reality&pbk=...&sid=...&flow=xtls-rprx-vision#remark`
+- [x] QR (`skip2/go-qrcode` PNG output via `/api/clients/{cid}/qr`)
 
 ### VMess
-- [ ] config template VMess + WS+TLS
-- [ ] share link (`vmess://<base64 json>`)
+- [x] `proto_vmess.go` (alterId 0, AEAD default)
+- [x] share link `vmess://<base64 JSON>` (v2rayN classic format)
 
 ### Trojan
-- [ ] config template Trojan + TCP+TLS
-- [ ] share link (`trojan://...`)
+- [x] `proto_trojan.go` + Fallback support
+- [x] share link `trojan://password@host:port?...`
 
-### Shadowsocks (+ SS2022)
-- [ ] config template SS + SS2022
-- [ ] gen shared key
-- [ ] share link (`ss://...`)
+### Shadowsocks + SS2022
+- [x] `proto_shadowsocks.go` — classic ใช้ single password, SS2022 auto-switch เป็น clients[]
+- [x] gen shared key ตามความยาว method (16/32 bytes)
+- [x] share link `ss://<base64 method:password>@host:port#remark`
 
-### Transport variants (ทำร่วมกับ protocol ข้างบน)
-- [ ] TCP (Raw)
-- [ ] WebSocket
-- [ ] gRPC
-- [ ] HTTPUpgrade
-- [ ] XHTTP
-- [ ] mKCP
+### Transport variants (ผ่าน `transport.go` shared)
+- [x] TCP (Raw)
+- [x] WebSocket + path/host header
+- [x] gRPC + serviceName
+- [x] HTTPUpgrade
+- [x] XHTTP (mode auto)
+- [x] mKCP (default settings)
 
 ### Security layers
-- [ ] TLS (Let's Encrypt auto-issue)
-- [ ] XTLS
-- [ ] REALITY (ไม่ต้อง cert)
-- [ ] ECH
-- [ ] Post-Quantum
+- [x] TLS (SNI, ALPN, fingerprint, certificates)
+- [x] XTLS (via flow=xtls-rprx-vision บน Reality)
+- [x] REALITY (dest + serverNames + privateKey + shortIds + spiderX)
+- [ ] Let's Encrypt auto-issue — defer ไป Phase 9
+- [ ] ECH / Post-Quantum — xray-core support ยัง scaffolded ผ่าน TransportParams
 
 ---
 
 ## Phase 4 — Protocol support (Tier 2 - extra)
 
-- [ ] WireGuard inbound
-- [ ] Hysteria2
-- [ ] HTTP proxy inbound
-- [ ] SOCKS inbound
-- [ ] Dokodemo-door / Tunnel
-- [ ] TUN device
+- [x] WireGuard inbound (`proto_wireguard.go` — secretKey + peers[])
+- [x] Hysteria2 (`proto_hysteria2.go` — users + obfs salamander)
+- [x] HTTP proxy inbound (`proto_simple.go`)
+- [x] SOCKS inbound (`proto_simple.go` — password/noauth auto)
+- [x] Dokodemo-door / Tunnel (`proto_simple.go`)
+- [ ] TUN device — ต้องเพิ่ม `with_gvisor` build tag ใน `Dockerfile.xray` (defer)
+
+---
+
+## Phase 3-4 — Backend integration (bonus)
+
+- [x] `internal/xray/generate.go` — DB → `Config` struct → JSON → atomic write to `paths.XrayConfigPath`
+- [x] built-in API inbound (`127.0.0.1:10085`) เตรียมไว้ให้ Phase 7 poll stats
+- [x] `direct` + `block` outbounds + basic routing (api → api)
+- [x] `internal/xray/daemon.go` `Reload(db)` — regen + `systemctl try-reload-or-restart hexplus-xray`
+- [x] `internal/panel/api_inbounds.go` — GET/POST/PUT/DELETE `/api/inbounds[/:id]`
+- [x] `internal/panel/api_clients.go` — GET/POST/PUT/DELETE + `/api/clients/{cid}/link` + `/qr`
+- [x] auto-fill identity (uuid / trojan password / SS key / hy2 password) ตอน create client
+- [x] mount routes ใน `server.go` (require session)
+- [x] `go build ./...` + `go vet ./...` ผ่านหลัง Phase 3+4
 
 ---
 
