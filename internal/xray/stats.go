@@ -15,17 +15,28 @@ package xray
 //   outbound>>>tag>>>traffic>>>{uplink|downlink}
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os/exec"
-	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/lolyhexey/hexplus/internal/paths"
+)
+
+// prev tracks the last-seen absolute counter value per (scope, name,
+// direction) so we can compute deltas without asking xray to reset.
+// Reset-mode is destructive: a failed parse would flush the pending
+// bytes into oblivion (which is what happened before the JSON fix).
+// Delta-mode leaves xray as the source of truth.
+var (
+	prevMu sync.Mutex
+	prev   = map[string]int64{}
 )
 
 // StatsAPIAddr is the loopback endpoint the generated config binds the
@@ -49,16 +60,22 @@ type Sample struct {
 }
 
 // xrayStatResponse mirrors the JSON emitted by `xray api statsquery`.
+// Value is a raw JSON number in the wire format; using json.Number lets
+// us accept both the number-form emitted by modern xray-core (25.x+)
+// and the older string-form that used to ship in 1.x-era protobuf-JSON.
 type xrayStatResponse struct {
 	Stat []struct {
-		Name  string `json:"name"`
-		Value string `json:"value"` // JSON encodes int64 as string
+		Name  string      `json:"name"`
+		Value json.Number `json:"value"`
 	} `json:"stat"`
 }
 
-// Poll runs one query cycle and returns the aggregated samples. Zero
-// counters (no traffic since last poll) are elided so callers don't
-// waste DB writes on nothing.
+// Poll runs one query cycle in non-destructive mode and returns the
+// deltas since the last successful poll. Xray keeps counting; we
+// compute (current - prev) locally and remember `current` for the
+// next call. If xray restarted (current < prev) the whole current
+// value is treated as a delta so we don't lose the first slice of
+// post-restart traffic.
 func Poll(ctx context.Context) ([]Sample, error) {
 	pctx, cancel := context.WithTimeout(ctx, 8*time.Second)
 	defer cancel()
@@ -66,7 +83,7 @@ func Poll(ctx context.Context) ([]Sample, error) {
 	cmd := exec.CommandContext(pctx, paths.LibDir+"/xray",
 		"api", "statsquery",
 		"--server="+StatsAPIAddr,
-		"-reset",
+		// intentionally NO -reset: we compute deltas ourselves
 	)
 	out, err := cmd.Output()
 	if err != nil {
@@ -79,12 +96,19 @@ func Poll(ctx context.Context) ([]Sample, error) {
 }
 
 // parseStatsJSON is factored out so tests can feed it fixtures without
-// spawning xray.
+// spawning xray. Returns per-counter deltas relative to the last call.
+// Zero-delta rows are elided.
 func parseStatsJSON(raw []byte) ([]Sample, error) {
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.UseNumber()
 	var resp xrayStatResponse
-	if err := json.Unmarshal(raw, &resp); err != nil {
+	if err := dec.Decode(&resp); err != nil {
 		return nil, fmt.Errorf("parse stats json: %w", err)
 	}
+
+	prevMu.Lock()
+	defer prevMu.Unlock()
+
 	// Bucket by (scope, name); one row combines the uplink + downlink
 	// entries that xray emits separately.
 	type key struct{ scope, name string }
@@ -94,10 +118,24 @@ func parseStatsJSON(raw []byte) ([]Sample, error) {
 		if !ok {
 			continue
 		}
-		val, err := strconv.ParseInt(s.Value, 10, 64)
+		cur, err := s.Value.Int64()
 		if err != nil {
 			continue
 		}
+		fullKey := s.Name
+		last := prev[fullKey]
+		delta := cur - last
+		if delta < 0 {
+			// xray restart wiped the counter — accept current as the
+			// delta so we don't lose the first slice of post-restart
+			// traffic to a "went backwards" veto.
+			delta = cur
+		}
+		prev[fullKey] = cur
+		if delta == 0 {
+			continue
+		}
+
 		k := key{scope, name}
 		b := buckets[k]
 		if b == nil {
@@ -105,9 +143,9 @@ func parseStatsJSON(raw []byte) ([]Sample, error) {
 			buckets[k] = b
 		}
 		if direction == "uplink" {
-			b.Up += val
+			b.Up += delta
 		} else if direction == "downlink" {
-			b.Down += val
+			b.Down += delta
 		}
 	}
 	out := make([]Sample, 0, len(buckets))
@@ -118,6 +156,15 @@ func parseStatsJSON(raw []byte) ([]Sample, error) {
 		out = append(out, *b)
 	}
 	return out, nil
+}
+
+// forgetCounter drops one prev entry so ResetUserCounter's zero-out on
+// xray is followed by our next poll starting a fresh delta baseline.
+func forgetCounter(email string) {
+	prevMu.Lock()
+	defer prevMu.Unlock()
+	delete(prev, "user>>>"+email+">>>traffic>>>uplink")
+	delete(prev, "user>>>"+email+">>>traffic>>>downlink")
 }
 
 // splitStatName teases apart "scope>>>name>>>traffic>>>direction". A
@@ -148,6 +195,10 @@ func ResetUserCounter(email string) error {
 			continue
 		}
 	}
+	// Drop our own remembered baseline for this email so the next
+	// non-reset Poll doesn't compute a giant negative delta against
+	// the freshly-zeroed xray counter.
+	forgetCounter(email)
 	return nil
 }
 
