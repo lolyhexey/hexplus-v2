@@ -63,9 +63,26 @@ jobs:
 
       - uses: docker/setup-buildx-action@v3
 
-      # The dropbear, openvpn, and squid Dockerfiles all read TARGETARCH
-      # from buildx so each runner produces a binary that matches its own
-      # kernel - no QEMU step needed.
+      - name: Node.js for frontend build
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Build frontend bundle
+        # Runs on every arch — the output JS/CSS is identical across
+        # archs, so this repeats the ~2s vite build per runner (cheap
+        # enough that adding a shared job + artifact download costs more).
+        run: |
+          cd frontend
+          npm ci --no-audit --no-fund
+          npm run build
+
+      # The dropbear, openvpn, squid, and xray Dockerfiles all read
+      # TARGETARCH from buildx so each runner produces a binary that
+      # matches its own kernel - no QEMU step needed for the arm64 and
+      # amd64 matrix entries.
       - name: Build static dropbear
         run: |
           docker buildx build \
@@ -93,6 +110,15 @@ jobs:
             --target export \
             build/
 
+      - name: Build static xray-core
+        run: |
+          docker buildx build \
+            --platform ${{ matrix.platform }} \
+            --file build/Dockerfile.xray \
+            --output type=local,dest=internal/assets/bin/_xray \
+            --target export \
+            build/
+
       - name: Stage statics for go:embed
         run: |
           cp internal/assets/bin/_openvpn/openvpn        internal/assets/bin/openvpn
@@ -100,7 +126,9 @@ jobs:
           cp internal/assets/bin/_squid/squid                  internal/assets/bin/squid
           cp internal/assets/bin/_squid/mime.conf              internal/assets/bin/mime.conf
           cp internal/assets/bin/_squid/squid-errors.tar.gz   internal/assets/bin/squid-errors.tar.gz
-          file internal/assets/bin/openvpn internal/assets/bin/squid internal/assets/bin/dropbearmulti
+          cp internal/assets/bin/_xray/xray              internal/assets/bin/xray
+          file internal/assets/bin/openvpn internal/assets/bin/squid \
+               internal/assets/bin/dropbearmulti internal/assets/bin/xray
 
       - name: Cross-compile hexplus-${{ matrix.unameArch }}
         env:

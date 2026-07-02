@@ -25,7 +25,7 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      - name: Placeholder static binaries (so //go:embed has something to walk)
+      - name: Placeholder static binaries + frontend (so //go:embed has something to walk)
         run: |
           # //go:embed bin/openvpn (etc.) errors at compile time when the
           # files are missing - gofmt/vet/test/build all trip on it. The
@@ -33,7 +33,14 @@ jobs:
           # validation we just need the embed paths to exist.
           touch internal/assets/bin/openvpn \
                 internal/assets/bin/squid \
-                internal/assets/bin/dropbearmulti
+                internal/assets/bin/dropbearmulti \
+                internal/assets/bin/xray
+          # Same story for the React SPA bundle. `//go:embed all:dist`
+          # in internal/panel/frontend fails if the dist directory is
+          # empty; the placeholder index.html already committed to the
+          # repo satisfies it. No-op is fine here.
+          test -f internal/panel/frontend/dist/index.html \
+            || echo '<!doctype html><title>placeholder</title>' > internal/panel/frontend/dist/index.html
 
       - name: gofmt
         run: |

@@ -1,0 +1,4 @@
+# Built bundle — regenerated per build by `cd frontend && npm run build`.
+# We commit only placeholder index.html + .gitkeep so //go:embed all:dist
+# has something to walk on a fresh checkout.
+dist/assets/

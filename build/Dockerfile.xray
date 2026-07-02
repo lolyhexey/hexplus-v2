@@ -16,10 +16,12 @@
 # it via --build-arg XRAY_VERSION=vX.Y.Z to pin per hexplus release.
 
 ARG XRAY_VERSION=v25.3.6
-ARG ALPINE_VERSION=3.19
 ARG GO_VERSION=1.24
 
-FROM golang:${GO_VERSION}-alpine${ALPINE_VERSION} AS build
+# golang:<ver>-alpine (no pinned alpine version) tracks whichever Alpine
+# the upstream Go image is built against. Trying to pin both breaks any
+# time Go's Alpine tag lags — the tag matrix is not exhaustive.
+FROM golang:${GO_VERSION}-alpine AS build
 ARG XRAY_VERSION
 
 RUN apk add --no-cache git bash
@@ -38,8 +40,6 @@ RUN CGO_ENABLED=0 go build \
         ./main
 
 RUN /out/xray version | head -5 \
-    && echo "---" \
-    && file /out/xray \
     && echo "---" \
     && ls -lh /out/xray
 
