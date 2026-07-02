@@ -29,6 +29,13 @@ Checklist สำหรับงานเพิ่ม V2Ray/Xray Web Panel เข
 - [x] **Path config/data**: `/var/lib/hexplus/` ทั้งหมด (panel DB, xray config, backups, cert)
 - [x] **gRPC stats API**: bind `127.0.0.1:10085` เท่านั้น (ไม่ expose ออกนอก)
 - [x] **Xray log**: journald เท่านั้น (`journalctl -u hexplus-xray`) ไม่เขียน log file
+- [x] **UI language default**: TH (มี toggle EN)
+- [x] **Traffic stats polling**: 10 วินาที/ครั้ง
+- [x] **Session timeout**: 24 ชั่วโมง sliding (active = ต่อเวลา)
+- [x] **Default inbound port**: suggest random free port ตอน create (user แก้ได้)
+- [x] **Frontend build**: dev machine ต้องมี node 20+ / pnpm ก่อน `make build-all` (ไม่ commit dist/)
+- [x] **Multi-arch xray**: build ครบ `amd64 / arm64 / armv7` เหมือน hexplus
+- [x] **Test env**: dev บน Windows local + integration test บน VPS Linux ก่อน release
 
 ---
 
