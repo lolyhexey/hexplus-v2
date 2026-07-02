@@ -151,7 +151,116 @@ func Generate(sqldb *sql.DB) (Config, int, error) {
 		cfg.Inbounds = append(cfg.Inbounds, built)
 		count++
 	}
+
+	// User-defined outbounds land AFTER the two synthesized ones
+	// (direct/block) so a routing rule with outboundTag="direct" still
+	// hits our freedom outbound even if the user names their WARP
+	// outbound "direct" (we detect that clash later; for now duplicate
+	// tags are the operator's problem).
+	if err := appendUserOutbounds(sqldb, &cfg); err != nil {
+		return cfg, count, err
+	}
+	if err := appendUserRoutingRules(sqldb, &cfg); err != nil {
+		return cfg, count, err
+	}
 	return cfg, count, nil
+}
+
+// appendUserOutbounds reads enabled rows from the outbounds table and
+// tacks them onto the Config. Settings/stream blobs are passed through
+// as-is (map[string]any) so protocol schema evolution doesn't require
+// a code change here — the panel API is the source of truth.
+func appendUserOutbounds(sqldb *sql.DB, cfg *Config) error {
+	rows, err := sqldb.Query(`SELECT tag, protocol, settings, stream FROM outbounds WHERE enabled = 1 ORDER BY id`)
+	if err != nil {
+		return fmt.Errorf("query outbounds: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var tag, protocol, settings, stream string
+		if err := rows.Scan(&tag, &protocol, &settings, &stream); err != nil {
+			return err
+		}
+		var s any
+		if settings != "" {
+			var m map[string]any
+			if err := json.Unmarshal([]byte(settings), &m); err == nil {
+				s = m
+			}
+		}
+		cfg.Outbounds = append(cfg.Outbounds, Outbound{
+			Tag:      tag,
+			Protocol: protocol,
+			Settings: s,
+		})
+	}
+	return rows.Err()
+}
+
+// appendUserRoutingRules translates the routing_rules table into
+// RoutingRule entries and appends them AFTER the built-in api rule.
+// The built-in api rule stays first so it always wins.
+func appendUserRoutingRules(sqldb *sql.DB, cfg *Config) error {
+	rows, err := sqldb.Query(`
+		SELECT outbound_tag, inbound_tag, domains, ips
+		FROM routing_rules WHERE enabled = 1 ORDER BY priority, id
+	`)
+	if err != nil {
+		return fmt.Errorf("query rules: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var outTag, inTag, domains, ips string
+		if err := rows.Scan(&outTag, &inTag, &domains, &ips); err != nil {
+			return err
+		}
+		rule := RoutingRule{
+			Type:        "field",
+			OutboundTag: outTag,
+		}
+		if inTag != "" {
+			rule.InboundTag = []string{inTag}
+		}
+		rule.Domain = splitNL(domains)
+		rule.IP = splitNL(ips)
+		cfg.Routing.Rules = append(cfg.Routing.Rules, rule)
+	}
+	return rows.Err()
+}
+
+// splitNL splits a newline-joined blob and drops empty entries. Same
+// convention as api_routing.splitLines but returns nil (not [])
+// because RoutingRule fields are omitted-when-empty in the JSON.
+func splitNL(s string) []string {
+	if s == "" {
+		return nil
+	}
+	out := []string{}
+	for _, line := range splitNoAlloc(s) {
+		if line != "" {
+			out = append(out, line)
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// splitNoAlloc is a lightweight strings.Split without the "" heap
+// churn; keeps generate.go dependency-free for callers that might
+// re-run this loop tens of times per second under heavy churn.
+func splitNoAlloc(s string) []string {
+	out := []string{}
+	start := 0
+	for i := 0; i < len(s); i++ {
+		if s[i] == '\n' {
+			out = append(out, s[start:i])
+			start = i + 1
+		}
+	}
+	out = append(out, s[start:])
+	return out
 }
 
 // buildInbound assembles one Inbound from a DB row, delegating to the

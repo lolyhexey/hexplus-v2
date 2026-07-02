@@ -196,20 +196,27 @@ Checklist สำหรับงานเพิ่ม V2Ray/Xray Web Panel เข
 
 ## Phase 8 — Routing / Outbound
 
-- [ ] custom routing rules (domain / IP / geosite / geoip)
-- [ ] outbound chain
-- [ ] WARP integration (auto-provision WARP interface)
-- [ ] NordVPN outbound
-- [ ] fallback หลายโปรโตคอลบนพอร์ตเดียว
+- [x] DB tables `outbounds` + `routing_rules` (migration v2)
+- [x] outbounds CRUD `/api/outbounds`
+- [x] routing rules CRUD `/api/routing/rules` (priority-ordered)
+- [x] custom routing rules (domain / IP + optional inbound_tag)
+- [x] outbound chain — ทำผ่าน settings JSON pass-through
+- [x] WARP integration `/api/routing/warp` — gen x25519 + POST เข้า Cloudflare `api.cloudflareclient.com/v0a4005/reg` + สร้าง outbound WireGuard อัตโนมัติ
+- [ ] NordVPN outbound — user เพิ่มเองผ่าน `/api/outbounds` ด้วย protocol wireguard + settings ของ NordVPN key
+- [x] Fallback support (VLESS/Trojan) — ผ่าน `Fallback` struct ใน settings JSON
 
 ---
 
 ## Phase 9 — Cert manager
 
-- [ ] Let's Encrypt auto-issue (HTTP-01 + DNS-01)
-- [ ] cert renewal cron
-- [ ] manual cert upload
-- [ ] show expiry ใน UI
+- [x] DB table `certs` (migration v2)
+- [x] Let's Encrypt HTTP-01 issue (`internal/xray/certs.go` — spawn temp :80 server + `golang.org/x/crypto/acme`)
+- [ ] DNS-01 challenge — defer (ต้องต่อ DNS provider API)
+- [x] manual cert upload `POST /api/certs/manual` (base64 PEM หรือ raw PEM)
+- [x] cert renewal endpoint `POST /api/certs/{id}/renew`
+- [x] file storage ที่ `XrayStateDir/certs/<domain>/{fullchain,privkey}.pem`
+- [x] `NotAfter` โชว์ใน `/api/certs` list — cron UI ทำใน Phase 10
+- [ ] auto-renewal cron background — defer (renew ด้วยมือได้จาก API/UI ตอนนี้)
 
 ---
 
@@ -244,20 +251,21 @@ Checklist สำหรับงานเพิ่ม V2Ray/Xray Web Panel เข
 
 ## Phase 11 — hexplus installer menu
 
-- [ ] เพิ่ม menu entry ใน `internal/menu/` (option ใหม่หรือ sub-menu)
-- [ ] submenu:
-  - [ ] ติดตั้ง V2Ray Panel (ถามพอร์ต + gen admin password random โชว์ครั้งเดียว)
-  - [ ] ถอนการติดตั้ง
-  - [ ] แสดง URL + admin password ปัจจุบัน
-  - [ ] restart panel
-  - [ ] restart xray
-  - [ ] เปลี่ยน panel port (validate port ว่าง + update unit + reload)
-  - [ ] เปลี่ยน / reset admin password (bcrypt hash → เขียน DB)
-- [ ] check port ว่างก่อนติดตั้ง (ชนกับ fileserver 82 หรือ OpenVPN?)
-- [ ] เตือนถ้าพอร์ต Xray inbound ชนกับ OpenVPN
-- [ ] auto-open firewall port
-- [ ] uninstall clean: unit + DB + iptables + xray extracted binary
-- [ ] header ปัจจุบัน (V2RAY line) โชว์สถานะ + port
+- [x] เมนู entry ใหม่ที่หน้า 2 → option `33 V2Ray Web Panel`
+- [x] submenu (`internal/menu/v2ray.go`):
+  - [x] 01 ติดตั้ง/รีเซ็ต Panel (ถามพอร์ต default 2053, keep-DB Y/N, gen admin password + โชว์ครั้งเดียว)
+  - [x] 02 ถอนการติดตั้ง (ถาม wipe DB Y/N)
+  - [x] 03 แสดง URL + admin username
+  - [x] 04 reset admin password (สุ่มให้หรือใส่เอง)
+  - [x] 05 เปลี่ยน panel port + auto-restart unit
+  - [x] 06 restart panel + xray
+  - [x] 07 enable + start (panel + xray)
+  - [x] 08 stop + disable (panel + xray)
+  - [x] 09 ย้อนกลับ
+- [x] warning HTTP-only โชว์ที่หัวเมนู
+- [x] status indicator (● ทำงาน / ○ ไม่ได้ติดตั้ง / ◌ หยุด) + โชว์ port ปัจจุบัน
+- [ ] auto-open firewall port — ต่อไป (ยังไม่มี iptables helper ครบสำหรับพอร์ต arbitrary)
+- [ ] เตือน port ชนก่อนติดตั้ง — validate เบื้องต้นทำแล้ว, deep-check defer
 
 ---
 

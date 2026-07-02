@@ -108,6 +108,58 @@ CREATE TABLE sessions (
 CREATE INDEX idx_sessions_admin ON sessions(admin_id);
 CREATE INDEX idx_sessions_exp   ON sessions(expires_at);
 `,
+	// v2: routing + outbounds + certificates.
+	//
+	// - outbounds: user-configured egress channels. freedom/blackhole
+	//   are always synthesized by generate.go; this table holds WARP,
+	//   proxy chains, socks/http outbounds, and any custom ones.
+	// - routing_rules: field-type rules with a priority ordering. Lower
+	//   priority runs first; ties broken by id.
+	// - certs: managed TLS material for VLESS/VMess/Trojan+TLS inbounds.
+	//   Source is either "acme" (Let's Encrypt) or "manual" (uploaded).
+	`
+CREATE TABLE outbounds (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    node_id      INTEGER NOT NULL DEFAULT 1 REFERENCES nodes(id) ON DELETE RESTRICT,
+    tag          TEXT    NOT NULL UNIQUE,
+    protocol     TEXT    NOT NULL,
+    settings     TEXT    NOT NULL DEFAULT '{}',
+    stream       TEXT    NOT NULL DEFAULT '{}',
+    remark       TEXT    NOT NULL DEFAULT '',
+    enabled      INTEGER NOT NULL DEFAULT 1,
+    created_at   INTEGER NOT NULL,
+    updated_at   INTEGER NOT NULL
+);
+
+CREATE TABLE routing_rules (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    priority       INTEGER NOT NULL DEFAULT 100,
+    outbound_tag   TEXT    NOT NULL,
+    inbound_tag    TEXT    NOT NULL DEFAULT '',
+    domains        TEXT    NOT NULL DEFAULT '',  -- newline-joined
+    ips            TEXT    NOT NULL DEFAULT '',  -- newline-joined
+    protocols      TEXT    NOT NULL DEFAULT '',
+    port_range     TEXT    NOT NULL DEFAULT '',
+    remark         TEXT    NOT NULL DEFAULT '',
+    enabled        INTEGER NOT NULL DEFAULT 1,
+    created_at     INTEGER NOT NULL,
+    updated_at     INTEGER NOT NULL
+);
+CREATE INDEX idx_rules_priority ON routing_rules(priority, id);
+
+CREATE TABLE certs (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    domain          TEXT    NOT NULL UNIQUE,
+    source          TEXT    NOT NULL DEFAULT 'acme',  -- 'acme' | 'manual'
+    cert_path       TEXT    NOT NULL,
+    key_path        TEXT    NOT NULL,
+    not_after       INTEGER NOT NULL DEFAULT 0,
+    last_renewed_at INTEGER NOT NULL DEFAULT 0,
+    remark          TEXT    NOT NULL DEFAULT '',
+    created_at      INTEGER NOT NULL,
+    updated_at      INTEGER NOT NULL
+);
+`,
 }
 
 // targetVersion is len(migrations); DBs at this version are up to date.

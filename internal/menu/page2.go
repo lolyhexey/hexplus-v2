@@ -121,6 +121,8 @@ func dispatchPage2(choice string, r *bufio.Reader) (bool, error) {
 		return false, handleWithWait(r, runSetSpeed)
 	case "32":
 		return false, handleWithWait(r, runTimeReboot)
+	case "33":
+		return false, runV2RayPanel(r)
 
 	default:
 		fmt.Println("\n" + cRedBold + "[ผิดพลาด]" + cYelBold + " ตัวเลือกไม่ถูกต้อง กรุณาเลือกตัวเลขจากเมนู" + cReset)
@@ -183,7 +185,7 @@ func paintPage2() {
 		{"21", "เพิ่มโฮสต์", "30", "เปิดผู้ใช้รูท"},
 		{"22", "ลบโฮสต์", "31", "ตั้งความเร็วอินเทอร์เน็ต"},
 		{"23", "รีบูตเซิร์ฟเวอร์ใหม่", "32", "ตั้งเวลารีบูตระบบ"},
-		{"24", "รีบูตระบบใหม่", "", ""},
+		{"24", "รีบูตระบบใหม่", "33", "V2Ray Web Panel"},
 		{"25", "เปลี่ยนรหัสผ่านรูท", "", ""},
 		{"26", autoLabel, "", ""},
 		{"27", "อัพเดตสคริปต์", "", ""},

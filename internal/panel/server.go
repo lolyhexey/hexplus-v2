@@ -104,6 +104,8 @@ func (s *Server) routes() http.Handler {
 	s.registerInboundRoutes(admin)
 	s.registerClientRoutes(admin)
 	s.registerClientOpRoutes(admin)
+	s.registerRoutingRoutes(admin)
+	s.registerCertRoutes(admin)
 	admin.HandleFunc("/", s.handleRoot) // placeholder — frontend embed replaces this in Phase 10
 
 	if s.cfg.URLPrefix != "" && s.cfg.URLPrefix != "/" {
