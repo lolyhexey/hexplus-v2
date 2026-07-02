@@ -76,6 +76,10 @@ func main() {
 		runSSLTunnel(rest)
 	case "sslhmux":
 		runSSLHMux(rest)
+	case "panel":
+		runPanel(rest)
+	case "xray":
+		runXray(rest)
 	case "help", "-h", "--help":
 		printUsage(os.Stdout)
 	default:
@@ -114,6 +118,8 @@ Subcommands:
   proxy remove <name>    drop a proxy's config row + systemd unit
   proxy run <name>       foreground server (invoked by systemd)
   menu                   launch the Thai bubbletea TUI (default action when installed)
+  panel <verb> [flags]   V2Ray web panel (install/uninstall/serve/show/reset-password/port)
+  xray <verb>            xray-core control hook for the panel (reload)
   extract              dev-only: extract embedded assets to --lib-dir without installing
   version              print version metadata
   help                 this message

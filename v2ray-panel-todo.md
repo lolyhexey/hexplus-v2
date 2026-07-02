@@ -67,23 +67,26 @@ Checklist สำหรับงานเพิ่ม V2Ray/Xray Web Panel เข
 ## Phase 2 — Panel backend
 
 ### HTTP server + auth
-- [ ] `internal/panel/` package
-- [ ] `panel/server.go` — HTTP router (net/http)
-- [ ] `panel/auth.go` — session + bcrypt login
-- [ ] `panel/tls.go` — self-signed cert gen (reuse `internal/pki`)
+- [x] `internal/panel/` package (`config.go`, `server.go`, `auth.go`, `install.go`)
+- [x] `panel/server.go` — HTTP router, URLPrefix strip, /sub /login /logout /api/session /healthz
+- [x] `panel/auth.go` — bcrypt login, HMAC-signed session cookie, 24h sliding expiry, RequireSession middleware
+- [x] TLS: **skipped ตาม decision** — HTTP-only, warning โชว์ตอนติดตั้ง
 
 ### Database
-- [ ] `panel/db/` — SQLite driver setup (`modernc.org/sqlite`)
-- [ ] schema: `admin_users`, `inbounds`, `clients`, `traffic_stats`, `certs`, `settings`
-- [ ] migration system (numbered SQL files หรือ code migrations)
-- [ ] backup/restore helper
+- [x] `panel/db/` — SQLite via `modernc.org/sqlite` (pure Go), WAL + FK + busy_timeout pragmas
+- [x] schema v1: `nodes`, `admin_users`, `settings`, `inbounds`, `clients`, `traffic_samples`, `sessions` — `node_id` เผื่อ multi-node ทุก user-scoped table
+- [x] migration system via `PRAGMA user_version` + transactional apply
+- [ ] backup/restore helper — defer ไป Phase 12
 
-### Subcommands
-- [ ] `hexplus panel serve` — รัน web server
-- [ ] `hexplus panel install` — gen admin password + write unit + open firewall
-- [ ] `hexplus panel uninstall` — cleanup ครบ (unit, DB, iptables, xray config)
-- [ ] `hexplus panel show` — โชว์ URL + admin password ปัจจุบัน
-- [ ] `hexplus xray reload` — hook สำหรับ panel เรียก
+### Subcommands (wired ใน `cmd/hexplus/main.go` + `cmd/hexplus/panel.go`)
+- [x] `hexplus panel serve` — systemd ExecStart, SIGTERM-aware shutdown
+- [x] `hexplus panel install` — gen config + random admin pw, seed DB, write units, ไม่ auto-enable
+- [x] `hexplus panel uninstall [--wipe-db]` — stop/disable/remove units, clean XrayStateDir, prompt keep/wipe DB
+- [x] `hexplus panel show` — โชว์ port/URL/admin username
+- [x] `hexplus panel port <N>` — เปลี่ยน port + restart unit
+- [x] `hexplus panel reset-password [--user] [--password]` — เปลี่ยน admin password
+- [x] `hexplus xray reload` — hook ให้ panel เรียกเวลา regen config
+- [x] `go build ./...` + `go vet ./...` ผ่านหลัง Phase 2
 
 ---
 
