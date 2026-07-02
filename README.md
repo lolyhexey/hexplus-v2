@@ -35,7 +35,7 @@ menu
 - รองรับหลาย port ต่อ slot, custom response code/message
 
 ### V2Ray Web Panel (ใหม่)
-Panel จัดการ xray-core แบบ 3x-ui — เข้าเมนู `hexplus → 17 → 33` เพื่อเปิดใช้
+Panel จัดการ xray-core แบบ 3x-ui — เข้าเมนู `hexplus → 10 → 08` เพื่อเปิดใช้
 
 - **Protocol**: VLESS+REALITY+XTLS-Vision, VMess, Trojan, Shadowsocks/SS2022, Hysteria2, WireGuard, HTTP, SOCKS, Dokodemo-door
 - **Transport**: TCP / WS / gRPC / HTTPUpgrade / XHTTP / mKCP  •  **Security**: TLS / XTLS / Reality

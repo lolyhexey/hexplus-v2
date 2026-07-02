@@ -154,7 +154,7 @@ func runPanelInstallMenu(r *bufio.Reader) error {
 	fmt.Println()
 	fmt.Println(cRedBold + "*** จดรหัสผ่านไว้ที่ไหนก็ได้ — จะไม่โชว์อีก ***" + cReset)
 	fmt.Println()
-	fmt.Println("เปิดใช้งานด้วย: hexplus menu → 17 → 33 → 07 (เปิดบริการ)")
+	fmt.Println("เปิดใช้งานด้วย: hexplus menu → 10 → 08 → 07 (เปิดบริการ)")
 	return nil
 }
 

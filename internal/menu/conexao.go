@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"github.com/lolyhexey/hexplus/internal/ovpninstance"
+	"github.com/lolyhexey/hexplus/internal/panel"
 	"github.com/lolyhexey/hexplus/internal/proxy"
 	"github.com/lolyhexey/hexplus/internal/service"
 	"github.com/lolyhexey/hexplus/internal/sslhmux"
@@ -78,6 +79,11 @@ func runConexao(r *bufio.Reader) error {
 			}
 		case "7", "07":
 			if err := sslhMuxMenu(r); err != nil {
+				fmt.Println(cRedBold + "[ผิดพลาด] " + cYelBold + err.Error() + cReset)
+				waitEnter(r)
+			}
+		case "8", "08":
+			if err := runV2RayPanel(r); err != nil {
 				fmt.Println(cRedBold + "[ผิดพลาด] " + cYelBold + err.Error() + cReset)
 				waitEnter(r)
 			}
@@ -166,6 +172,15 @@ func paintConexaoHeader() {
 		fmt.Printf("%sบริการ: %sPROXY SOCKS %sพอร์ต: %s%s%s\n",
 			cWhtBold, cYelBold, cWhtBold, cCyanBold, strings.Join(strs, " "), cReset)
 	}
+	// V2RAY PANEL: port lives in panel.yaml, unit is hexplus-panel.
+	if svc, ok := service.ByName("panel"); ok {
+		if st, _ := service.Status(svc); st.ActiveState == "active" {
+			if cfg, err := panel.Load(); err == nil {
+				fmt.Printf("%sบริการ: %sV2RAY PANEL %sพอร์ต: %s%d%s\n",
+					cWhtBold, cYelBold, cWhtBold, cCyanBold, cfg.Port, cReset)
+			}
+		}
+	}
 	printSep()
 }
 
@@ -201,6 +216,7 @@ func paintConexaoMenu() {
 		{"05", "PROXY SOCKS", "proxy"},
 		{"06", "SSL TUNNEL", "ssltunnel"},
 		{"07", "SSLH MULTIPLEX", "sslhmux"},
+		{"08", "V2RAY PANEL", "panel"},
 	}
 	fmt.Println()
 	for _, it := range items {
@@ -228,6 +244,12 @@ func paintConexaoMenu() {
 			}
 		case "proxy":
 			if isAnyProxyActive() {
+				marker = markerOn()
+			} else {
+				marker = markerOff()
+			}
+		case "panel":
+			if stateOf["panel"].ActiveState == "active" {
 				marker = markerOn()
 			} else {
 				marker = markerOff()
