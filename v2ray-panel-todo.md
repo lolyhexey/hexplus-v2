@@ -156,35 +156,41 @@ Checklist สำหรับงานเพิ่ม V2Ray/Xray Web Panel เข
 
 ## Phase 5 — Client management
 
-- [ ] add/list/edit/remove client
-- [ ] traffic quota ต่อ user (bytes limit)
-- [ ] วันหมดอายุ (expiry timestamp)
-- [ ] IP concurrent limit (fail2ban-style)
-- [ ] online status (poll xray stats)
-- [ ] one-click share link + QR
-- [ ] enable/disable client (soft-toggle ไม่ต้องลบ)
-- [ ] reset counter ต่อ user
-- [ ] bulk operations (extend expiry, reset traffic ทั้งกลุ่ม)
+- [x] add/list/edit/remove client (`api_clients.go`)
+- [x] traffic quota ต่อ user (`quota_bytes` column)
+- [x] วันหมดอายุ (`expires_at` column) — enforced ใน `enforcer.go`
+- [x] IP concurrent limit column (`ip_limit`) — enforcement ยังต้องรอ xray-side hook (Phase 8+)
+- [ ] online status — จะโชว์ผ่าน stats (Phase 7 ทำแล้ว, ต่อ UI ทีหลัง)
+- [x] one-click share link + QR (`/api/clients/{cid}/link` + `/qr`)
+- [x] enable/disable toggle (`POST /api/clients/{cid}/toggle`)
+- [x] reset counter (`POST /api/clients/{cid}/reset` — reset ทั้ง panel + xray-side)
+- [x] bulk operations (`POST /api/clients/bulk` — op=toggle|reset|extend|delete)
+- [x] extend expiry (`POST /api/clients/{cid}/extend?days=N`, anchor to now ถ้าหมดอายุแล้ว)
 
 ---
 
 ## Phase 6 — Subscription server
 
-- [ ] subscription endpoint (`/sub/<token>`)
-- [ ] custom template หน้า sub
-- [ ] serve config ตาม client (Clash / v2rayN / Shadowrocket format)
-- [ ] token rotation
+- [x] subscription endpoint `/sub/{token}` (`subscription.go`) — public, ไม่ต้อง session
+- [x] เช็ค enabled + expires_at + quota ก่อนเสิร์ฟ (หมดอายุ/ครบโควตา = 404)
+- [x] format `?type=v2ray` (base64 default) + `?type=plain`
+- [ ] Clash / sing-box templates — คืน 501 ตอนนี้ (defer)
+- [x] pick server host จาก X-Forwarded-Host / Host header (ทำงานได้ทั้งตรงและหลัง reverse proxy)
+- [x] Subscription-Userinfo / Profile-Update-Interval / Profile-Title headers ตาม convention
+- [ ] token rotation UI — API generate ตอน create client แล้ว, endpoint rotate ยังไม่ทำ (defer เล็กน้อย)
 
 ---
 
 ## Phase 7 — Traffic / Stats
 
-- [ ] poll xray gRPC stats ทุก N วินาที
-- [ ] เก็บ time-series ใน SQLite (per-inbound / per-client / per-outbound)
-- [ ] dashboard: total up/down, top clients, per-inbound bandwidth
-- [ ] auto-disable client เมื่อ traffic เกิน quota
-- [ ] auto-disable client เมื่อ expiry ผ่าน
-- [ ] reset counter (manual + scheduled)
+- [x] poll xray stats ทุก 10s (`stats.go` — spawn `xray api statsquery -reset` subprocess, parse JSON) — เลี่ยงการ import xray-core gRPC ทั้งก้อน
+- [x] persist ลง `traffic_samples` per-inbound / per-user / per-outbound
+- [x] update `inbounds.total_up/down` + `clients.used_bytes` incrementally
+- [ ] dashboard UI — Phase 10
+- [x] auto-disable เมื่อ traffic เกิน quota (`enforcer.go` sweep ทุก 30s)
+- [x] auto-disable เมื่อ expiry ผ่าน (`enforcer.go`)
+- [x] manual reset counter (per-user via API + reset xray-side counter)
+- [x] scheduled loops รันภายใต้ `panel.Serve` derived-context เพื่อ shutdown clean บน SIGTERM
 
 ---
 

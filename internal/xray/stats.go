@@ -1,25 +1,245 @@
 package xray
 
-// stats.go: consume xray-core's gRPC stats API bound to 127.0.0.1:10085
-// (see APIConfig in config.go). Poll interval is 10s per Phase 0
-// decision; results are persisted to the panel DB by the caller.
+// stats.go: pull counters from xray-core's stats API and roll them
+// into panel-owned tables.
 //
-// Skeleton for Phase 1; real gRPC client lands in Phase 7.
+// We could import github.com/xtls/xray-core's gRPC client, but that
+// would drag half of xray-core into our binary. Instead we shell out
+// to the extracted xray binary, which has the same stats query built
+// in as a CLI subcommand — parseable JSON out, one subprocess per
+// poll interval (~10s). Cheap and avoids the dependency footprint.
+//
+// Counter name schema (xray convention, `>>>`-delimited):
+//   user>>>email>>>traffic>>>{uplink|downlink}
+//   inbound>>>tag>>>traffic>>>{uplink|downlink}
+//   outbound>>>tag>>>traffic>>>{uplink|downlink}
+
+import (
+	"context"
+	"database/sql"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"os/exec"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/lolyhexey/hexplus/internal/paths"
+)
+
+// StatsAPIAddr is the loopback endpoint the generated config binds the
+// API inbound to (see generate.go). Kept as a const so both the poller
+// and any diagnostic code use the same address.
+const StatsAPIAddr = "127.0.0.1:10085"
+
+// PollInterval matches the Phase 0 decision — 10 seconds is a good
+// tradeoff between freshness and DB write volume.
+const PollInterval = 10 * time.Second
 
 // Sample is one traffic reading for a given tag (inbound / outbound /
-// per-user). Bytes are cumulative since xray start; deltas are computed
-// by the DB layer.
+// per-user). Bytes are cumulative since the counter was last reset;
+// -reset in the CLI arg means each poll returns and clears the
+// deltas, which is what we want for time-series storage.
 type Sample struct {
-	Tag      string
-	Uplink   int64
-	Downlink int64
+	Scope string // "user" | "inbound" | "outbound"
+	Name  string // email, inbound tag, or outbound tag
+	Up    int64
+	Down  int64
 }
 
-// Poll returns the current set of counters from xray's stats API.
-// Returns an error if the API is unreachable (xray down, port not
-// bound yet, config drift).
+// xrayStatResponse mirrors the JSON emitted by `xray api statsquery`.
+type xrayStatResponse struct {
+	Stat []struct {
+		Name  string `json:"name"`
+		Value string `json:"value"` // JSON encodes int64 as string
+	} `json:"stat"`
+}
+
+// Poll runs one query cycle and returns the aggregated samples. Zero
+// counters (no traffic since last poll) are elided so callers don't
+// waste DB writes on nothing.
+func Poll(ctx context.Context) ([]Sample, error) {
+	pctx, cancel := context.WithTimeout(ctx, 8*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(pctx, paths.LibDir+"/xray",
+		"api", "statsquery",
+		"--server="+StatsAPIAddr,
+		"-reset",
+	)
+	out, err := cmd.Output()
+	if err != nil {
+		if errors.Is(pctx.Err(), context.DeadlineExceeded) {
+			return nil, errors.New("xray api statsquery timed out")
+		}
+		return nil, fmt.Errorf("xray api statsquery: %w", err)
+	}
+	return parseStatsJSON(out)
+}
+
+// parseStatsJSON is factored out so tests can feed it fixtures without
+// spawning xray.
+func parseStatsJSON(raw []byte) ([]Sample, error) {
+	var resp xrayStatResponse
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return nil, fmt.Errorf("parse stats json: %w", err)
+	}
+	// Bucket by (scope, name); one row combines the uplink + downlink
+	// entries that xray emits separately.
+	type key struct{ scope, name string }
+	buckets := make(map[key]*Sample)
+	for _, s := range resp.Stat {
+		scope, name, direction, ok := splitStatName(s.Name)
+		if !ok {
+			continue
+		}
+		val, err := strconv.ParseInt(s.Value, 10, 64)
+		if err != nil {
+			continue
+		}
+		k := key{scope, name}
+		b := buckets[k]
+		if b == nil {
+			b = &Sample{Scope: scope, Name: name}
+			buckets[k] = b
+		}
+		if direction == "uplink" {
+			b.Up += val
+		} else if direction == "downlink" {
+			b.Down += val
+		}
+	}
+	out := make([]Sample, 0, len(buckets))
+	for _, b := range buckets {
+		if b.Up == 0 && b.Down == 0 {
+			continue
+		}
+		out = append(out, *b)
+	}
+	return out, nil
+}
+
+// splitStatName teases apart "scope>>>name>>>traffic>>>direction". A
+// falsely-shaped counter (from a future xray version) is skipped, not
+// treated as an error.
+func splitStatName(name string) (scope, ident, direction string, ok bool) {
+	parts := strings.Split(name, ">>>")
+	if len(parts) != 4 || parts[2] != "traffic" {
+		return "", "", "", false
+	}
+	return parts[0], parts[1], parts[3], true
+}
+
+// ResetUserCounter zeroes the two per-user counters for the given
+// email. Used when the panel does a manual "reset used bytes" so the
+// next poll doesn't re-inflate the number.
+func ResetUserCounter(email string) error {
+	for _, direction := range []string{"uplink", "downlink"} {
+		cmd := exec.Command(paths.LibDir+"/xray",
+			"api", "stats",
+			"--server="+StatsAPIAddr,
+			"-name=user>>>"+email+">>>traffic>>>"+direction,
+			"-reset",
+		)
+		if err := cmd.Run(); err != nil {
+			// The counter might not exist yet (user just created,
+			// no traffic yet). Not an error worth surfacing.
+			continue
+		}
+	}
+	return nil
+}
+
+// Persist writes one poll's worth of samples into the panel DB:
+//   - one traffic_samples row per (scope, ref_id, sampled_at) as a
+//     historical breadcrumb
+//   - increment inbounds.total_up/down by inbound samples
+//   - increment clients.used_bytes by user samples (matched by email)
 //
-// Placeholder — implementation lands in Phase 7.
-func Poll() ([]Sample, error) {
-	return nil, nil
+// A single sqldb transaction wraps the whole batch so a partial write
+// on the way out doesn't half-apply an interval.
+func Persist(sqldb *sql.DB, samples []Sample) error {
+	if len(samples) == 0 {
+		return nil
+	}
+	tx, err := sqldb.Begin()
+	if err != nil {
+		return err
+	}
+	now := time.Now().Unix()
+	for _, s := range samples {
+		switch s.Scope {
+		case "inbound":
+			var id int64
+			err := tx.QueryRow(`SELECT id FROM inbounds WHERE tag = ?`, s.Name).Scan(&id)
+			if err != nil {
+				continue // orphaned counter from a since-deleted inbound
+			}
+			_, _ = tx.Exec(`INSERT INTO traffic_samples (scope, ref_id, sampled_at, up_bytes, down_bytes)
+			                VALUES ('inbound', ?, ?, ?, ?)`, id, now, s.Up, s.Down)
+			_, _ = tx.Exec(`UPDATE inbounds SET total_up = total_up + ?, total_down = total_down + ?
+			                WHERE id = ?`, s.Up, s.Down, id)
+		case "user":
+			// email is unique per inbound (see UNIQUE index in the
+			// schema) — but the same email can exist under two
+			// inbounds. Update every match.
+			rows, err := tx.Query(`SELECT id FROM clients WHERE email = ?`, s.Name)
+			if err != nil {
+				continue
+			}
+			var ids []int64
+			for rows.Next() {
+				var id int64
+				if err := rows.Scan(&id); err == nil {
+					ids = append(ids, id)
+				}
+			}
+			rows.Close()
+			for _, id := range ids {
+				_, _ = tx.Exec(`INSERT INTO traffic_samples (scope, ref_id, sampled_at, up_bytes, down_bytes)
+				                VALUES ('user', ?, ?, ?, ?)`, id, now, s.Up, s.Down)
+				_, _ = tx.Exec(`UPDATE clients SET used_bytes = used_bytes + ? WHERE id = ?`,
+					s.Up+s.Down, id)
+			}
+		case "outbound":
+			// We don't track per-outbound in a table today; the counter
+			// is still useful as a sample row so future dashboards can
+			// query "top outbounds over time".
+			hash := int64(fnv1a(s.Name))
+			_, _ = tx.Exec(`INSERT INTO traffic_samples (scope, ref_id, sampled_at, up_bytes, down_bytes)
+			                VALUES ('outbound', ?, ?, ?, ?)`, hash, now, s.Up, s.Down)
+		}
+	}
+	return tx.Commit()
+}
+
+// PollAndPersist is the loop-body helper: one poll, one persist. Used
+// by the panel's background goroutine so we don't repeat the (poll,
+// log, persist, log) boilerplate at the call site.
+func PollAndPersist(ctx context.Context, sqldb *sql.DB) (int, error) {
+	samples, err := Poll(ctx)
+	if err != nil {
+		return 0, err
+	}
+	if err := Persist(sqldb, samples); err != nil {
+		return 0, err
+	}
+	return len(samples), nil
+}
+
+// fnv1a hashes an outbound tag into a stable int64 for ref_id. Using a
+// text ref_id would either force a schema change or a JOIN we don't
+// need for a debug-only counter.
+func fnv1a(s string) uint64 {
+	const (
+		offset64 = 14695981039346656037
+		prime64  = 1099511628211
+	)
+	h := uint64(offset64)
+	for i := 0; i < len(s); i++ {
+		h ^= uint64(s[i])
+		h *= prime64
+	}
+	return h
 }

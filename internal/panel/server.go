@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/lolyhexey/hexplus/internal/panel/db"
+	"github.com/lolyhexey/hexplus/internal/xray"
 )
 
 // Server holds the panel's live dependencies. Constructed by Serve and
@@ -49,6 +50,13 @@ func Serve(ctx context.Context) error {
 		ReadHeaderTimeout: 10 * time.Second,
 		IdleTimeout:       60 * time.Second,
 	}
+
+	// Background loops for stats + enforcement. We use a derived ctx
+	// so the SIGTERM path cancels them alongside the HTTP shutdown.
+	bgCtx, cancelBG := context.WithCancel(ctx)
+	defer cancelBG()
+	go runStatsLoop(bgCtx, s.db)
+	go runEnforcerLoop(bgCtx, s.db)
 
 	errc := make(chan error, 1)
 	go func() {
@@ -95,6 +103,7 @@ func (s *Server) routes() http.Handler {
 	admin.HandleFunc("/api/session", s.auth.RequireSession(s.handleSession))
 	s.registerInboundRoutes(admin)
 	s.registerClientRoutes(admin)
+	s.registerClientOpRoutes(admin)
 	admin.HandleFunc("/", s.handleRoot) // placeholder — frontend embed replaces this in Phase 10
 
 	if s.cfg.URLPrefix != "" && s.cfg.URLPrefix != "/" {
@@ -136,8 +145,22 @@ func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write([]byte(`{"ok":true}`))
 }
 
-// handleSubscription serves the /sub/{token} endpoint. Real impl in
-// Phase 6; this stub returns 404 for now.
-func (s *Server) handleSubscription(w http.ResponseWriter, r *http.Request) {
-	http.NotFound(w, r)
+// handleSubscription lives in subscription.go.
+
+// runStatsLoop polls xray-core's counters every xray.PollInterval and
+// persists them to the panel DB. Errors are logged and swallowed; a
+// single failed poll doesn't kill the loop.
+func runStatsLoop(ctx context.Context, sqldb *sql.DB) {
+	t := time.NewTicker(xray.PollInterval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			if _, err := xray.PollAndPersist(ctx, sqldb); err != nil {
+				log.Printf("panel: stats poll: %v", err)
+			}
+		}
+	}
 }
