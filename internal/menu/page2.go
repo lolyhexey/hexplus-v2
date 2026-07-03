@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"github.com/lolyhexey/hexplus/internal/install"
+	"github.com/lolyhexey/hexplus/internal/progress"
 	"github.com/lolyhexey/hexplus/internal/service"
 	"github.com/lolyhexey/hexplus/internal/version"
 )
@@ -376,114 +377,142 @@ type ghAsset struct {
 // a busy executable text segment. rename() onto the same path is allowed
 // because the kernel keeps the old inode open for the live process while
 // new exec()s pick up the replacement.
-func runSelfUpdate(r *bufio.Reader) error {
+func runSelfUpdate(_ *bufio.Reader) error {
 	if err := requireRoot(); err != nil {
 		return err
 	}
 	clearScreen()
-	fmt.Println(cGrnBold + "กำลังตรวจสอบรุ่นล่าสุด..." + cReset)
 
 	const releaseURL = "https://api.github.com/repos/lolyhexey/hexplus-v2/releases/latest"
-	client := &http.Client{Timeout: 30 * time.Second}
+	client := &http.Client{Timeout: 60 * time.Second}
 
-	req, err := http.NewRequest(http.MethodGet, releaseURL, nil)
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Accept", "application/vnd.github+json")
-	resp, err := client.Do(req)
-	if err != nil {
-		return fmt.Errorf("ขอข้อมูลรุ่นล้มเหลว: %w", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("GitHub API ตอบกลับ HTTP %d", resp.StatusCode)
-	}
+	// State shared across steps via closure captures.
+	var (
+		rel        ghRelease
+		asset      *ghAsset
+		selfPath   string
+		tmpPath    string
+		upToDate   bool
+	)
 
-	var rel ghRelease
-	if err := json.NewDecoder(resp.Body).Decode(&rel); err != nil {
-		return fmt.Errorf("ไม่สามารถอ่าน JSON: %w", err)
-	}
-	if rel.TagName == "" {
-		return errors.New("ไม่พบ tag_name ในผลลัพธ์")
-	}
-
-	if rel.TagName == version.Version || rel.TagName == "v"+version.Version {
-		fmt.Println(cGrnBold + "เป็นรุ่นล่าสุดอยู่แล้ว (" + rel.TagName + ")" + cReset)
-		// Pause so the operator sees the result before re-paint.
-		time.Sleep(2 * time.Second)
-		return nil
-	}
-
-	// Pick the asset whose name contains the host arch. Linux-only by
-	// design - v2 doesn't ship Windows / macOS builds.
-	var asset *ghAsset
-	for i := range rel.Assets {
-		name := strings.ToLower(rel.Assets[i].Name)
-		if strings.Contains(name, runtime.GOARCH) && strings.Contains(name, "linux") {
-			asset = &rel.Assets[i]
-			break
-		}
-	}
-	if asset == nil {
-		// Fall back to arch-only match (older release naming).
-		for i := range rel.Assets {
-			if strings.Contains(strings.ToLower(rel.Assets[i].Name), runtime.GOARCH) {
-				asset = &rel.Assets[i]
-				break
+	fmt.Println()
+	if err := progress.Run([]progress.Step{
+		{Label: "ตรวจสอบรุ่นล่าสุดจาก GitHub", Work: func() error {
+			req, err := http.NewRequest(http.MethodGet, releaseURL, nil)
+			if err != nil {
+				return err
 			}
-		}
-	}
-	if asset == nil {
-		return fmt.Errorf("ไม่พบ asset สำหรับ %s", runtime.GOARCH)
-	}
+			req.Header.Set("Accept", "application/vnd.github+json")
+			resp, err := client.Do(req)
+			if err != nil {
+				return fmt.Errorf("ขอข้อมูลรุ่นล้มเหลว: %w", err)
+			}
+			defer resp.Body.Close()
+			if resp.StatusCode != http.StatusOK {
+				return fmt.Errorf("GitHub API ตอบกลับ HTTP %d", resp.StatusCode)
+			}
+			if err := json.NewDecoder(resp.Body).Decode(&rel); err != nil {
+				return fmt.Errorf("ไม่สามารถอ่าน JSON: %w", err)
+			}
+			if rel.TagName == "" {
+				return errors.New("ไม่พบ tag_name ในผลลัพธ์")
+			}
+			// Short-circuit further steps by flagging up-to-date; the
+			// remaining steps early-return so the progress bar still
+			// completes cleanly.
+			if rel.TagName == version.Version || rel.TagName == "v"+version.Version {
+				upToDate = true
+				return nil
+			}
+			// Pick the asset whose name matches the host arch. Prefer
+			// the "linux-<arch>" variant, fall back to arch-only for
+			// older releases.
+			for i := range rel.Assets {
+				name := strings.ToLower(rel.Assets[i].Name)
+				if strings.Contains(name, runtime.GOARCH) && strings.Contains(name, "linux") {
+					asset = &rel.Assets[i]
+					break
+				}
+			}
+			if asset == nil {
+				for i := range rel.Assets {
+					if strings.Contains(strings.ToLower(rel.Assets[i].Name), runtime.GOARCH) {
+						asset = &rel.Assets[i]
+						break
+					}
+				}
+			}
+			if asset == nil {
+				return fmt.Errorf("ไม่พบ asset สำหรับ %s", runtime.GOARCH)
+			}
+			return nil
+		}},
+		{Label: "ดาวน์โหลด binary รุ่นใหม่", Work: func() error {
+			if upToDate {
+				return nil
+			}
+			// Resolve the self path first so we know which directory
+			// to drop the temp file in — same-fs rename keeps atomicity.
+			self, err := os.Executable()
+			if err != nil {
+				return fmt.Errorf("locate self: %w", err)
+			}
+			if resolved, rerr := filepath.EvalSymlinks(self); rerr == nil {
+				self = resolved
+			}
+			selfPath = self
+			tmpPath = self + ".new"
 
-	fmt.Println(cYelBold + "ดาวน์โหลด " + asset.Name + "..." + cReset)
-
-	dlResp, err := client.Get(asset.BrowserDownloadURL)
-	if err != nil {
-		return fmt.Errorf("ดาวน์โหลดล้มเหลว: %w", err)
-	}
-	defer dlResp.Body.Close()
-	if dlResp.StatusCode != http.StatusOK {
-		return fmt.Errorf("ดาวน์โหลดตอบกลับ HTTP %d", dlResp.StatusCode)
-	}
-
-	// Resolve the self path first so we know which directory to drop the
-	// temp file in — same-fs rename keeps atomicity guarantees.
-	self, err := os.Executable()
-	if err != nil {
-		return fmt.Errorf("locate self: %w", err)
-	}
-	if resolved, rerr := filepath.EvalSymlinks(self); rerr == nil {
-		self = resolved
-	}
-	tmp := self + ".new"
-
-	out, err := os.OpenFile(tmp, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o755)
-	if err != nil {
-		return fmt.Errorf("เปิดไฟล์ %s: %w", tmp, err)
-	}
-	if _, err := io.Copy(out, dlResp.Body); err != nil {
-		out.Close()
-		_ = os.Remove(tmp)
-		return fmt.Errorf("คัดลอกไฟล์: %w", err)
-	}
-	if err := out.Close(); err != nil {
-		_ = os.Remove(tmp)
+			dlResp, err := client.Get(asset.BrowserDownloadURL)
+			if err != nil {
+				return fmt.Errorf("ดาวน์โหลดล้มเหลว: %w", err)
+			}
+			defer dlResp.Body.Close()
+			if dlResp.StatusCode != http.StatusOK {
+				return fmt.Errorf("ดาวน์โหลดตอบกลับ HTTP %d", dlResp.StatusCode)
+			}
+			out, err := os.OpenFile(tmpPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o755)
+			if err != nil {
+				return fmt.Errorf("เปิดไฟล์ %s: %w", tmpPath, err)
+			}
+			if _, err := io.Copy(out, dlResp.Body); err != nil {
+				out.Close()
+				_ = os.Remove(tmpPath)
+				return fmt.Errorf("คัดลอกไฟล์: %w", err)
+			}
+			if err := out.Close(); err != nil {
+				_ = os.Remove(tmpPath)
+				return err
+			}
+			return nil
+		}},
+		{Label: "ติดตั้งแทนที่ binary เดิม", Work: func() error {
+			if upToDate {
+				return nil
+			}
+			// chmod again in case umask shaved the executable bit.
+			if err := os.Chmod(tmpPath, 0o755); err != nil {
+				_ = os.Remove(tmpPath)
+				return err
+			}
+			// Atomic replace: Linux keeps the old inode alive for the
+			// currently-running process while new exec()s pick up the
+			// replacement.
+			if err := os.Rename(tmpPath, selfPath); err != nil {
+				_ = os.Remove(tmpPath)
+				return fmt.Errorf("rename: %w", err)
+			}
+			return nil
+		}},
+	}); err != nil {
 		return err
-	}
-	// chmod again in case umask shaved the executable bit.
-	if err := os.Chmod(tmp, 0o755); err != nil {
-		_ = os.Remove(tmp)
-		return err
-	}
-	if err := os.Rename(tmp, self); err != nil {
-		_ = os.Remove(tmp)
-		return fmt.Errorf("rename: %w", err)
 	}
 
 	fmt.Println()
+	if upToDate {
+		fmt.Println(cGrnBold + "เป็นรุ่นล่าสุดอยู่แล้ว (" + rel.TagName + ")" + cReset)
+		return nil
+	}
 	fmt.Println(cGrnBold + "อัพเดตเป็น " + rel.TagName + " สำเร็จ" + cReset)
 	fmt.Println(cYelBold + "รัน 'hexplus' อีกครั้ง" + cReset)
 	return nil

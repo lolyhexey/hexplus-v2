@@ -15,6 +15,7 @@ import (
 	"strings"
 
 	"github.com/lolyhexey/hexplus/internal/panel"
+	"github.com/lolyhexey/hexplus/internal/progress"
 	"github.com/lolyhexey/hexplus/internal/service"
 )
 
@@ -138,14 +139,23 @@ func runPanelInstallMenu(r *bufio.Reader) error {
 		keepDB = strings.EqualFold(strings.TrimSpace(line), "y")
 	}
 
-	res, err := panel.Install(panel.InstallOptions{
-		Port:   port,
-		KeepDB: keepDB,
-	})
-	if err != nil {
+	// Run the install under a progress-bar animation so the operator
+	// sees continuous feedback while xray extracts (~30MB), systemd
+	// units get written, and both services enable+start.  The whole
+	// thing typically takes 3-8 seconds — long enough that a silent
+	// pause feels like a hang.
+	var res panel.InstallResult
+	fmt.Println()
+	if err := progress.Run([]progress.Step{
+		{Label: "เตรียม config + PKI", Work: func() error {
+			var err error
+			res, err = panel.Install(panel.InstallOptions{Port: port, KeepDB: keepDB})
+			return err
+		}},
+		{Label: "เปิดใช้งานบริการ (xray + panel)", Work: func() error { return nil }},
+	}); err != nil {
 		return err
 	}
-	fmt.Println()
 	fmt.Println(cGrnBold + "ติดตั้งสำเร็จ" + cReset)
 	fmt.Printf("  พอร์ต:      %s%d%s\n", cWhtBold, res.Port, cReset)
 	fmt.Printf("  URL:        %shttp://<server-ip>:%d%s/%s\n", cWhtBold, res.Port, res.URLPrefix, cReset)
@@ -169,7 +179,10 @@ func runPanelUninstallMenu(r *bufio.Reader) error {
 	fmt.Print(cYelBold + "ลบข้อมูล DB ด้วยหรือไม่ (client, admin, sessions)? (y/N): " + cReset)
 	line, _ := r.ReadString('\n')
 	wipe := strings.EqualFold(strings.TrimSpace(line), "y")
-	if err := panel.Uninstall(wipe); err != nil {
+	fmt.Println()
+	if err := progress.Run([]progress.Step{
+		{Label: "หยุดบริการ + ลบ systemd unit", Work: func() error { return panel.Uninstall(wipe) }},
+	}); err != nil {
 		return err
 	}
 	fmt.Println(cGrnBold + "ถอนการติดตั้งสำเร็จ" + cReset)
@@ -230,17 +243,20 @@ func runPanelChangePortMenu(r *bufio.Reader) error {
 	if err != nil || p <= 0 || p > 65535 {
 		return fmt.Errorf("พอร์ตไม่ถูกต้อง")
 	}
-	if err := panel.ChangePort(p); err != nil {
+	fmt.Println()
+	steps := []progress.Step{
+		{Label: "อัปเดต panel.yaml", Work: func() error { return panel.ChangePort(p) }},
+	}
+	if svc, ok := service.ByName("panel"); ok {
+		steps = append(steps, progress.Step{
+			Label: fmt.Sprintf("Restart hexplus-panel (bind to :%d)", p),
+			Work:  func() error { return service.Restart(svc) },
+		})
+	}
+	if err := progress.Run(steps); err != nil {
 		return err
 	}
-	fmt.Printf("เปลี่ยนพอร์ตเป็น %d แล้ว\n", p)
-	if svc, ok := service.ByName("panel"); ok {
-		if err := service.Restart(svc); err != nil {
-			fmt.Println(cRedBold + "  restart ล้มเหลว: " + err.Error() + cReset)
-		} else {
-			fmt.Println(cGrnBold + "  restart panel เรียบร้อย" + cReset)
-		}
-	}
+	fmt.Printf("%sเปลี่ยนพอร์ตเป็น %d เรียบร้อย%s\n", cGrnBold, p, cReset)
 	return nil
 }
 
@@ -248,17 +264,20 @@ func runPanelRestartMenu(_ *bufio.Reader) error {
 	if !panel.IsInstalled() {
 		return fmt.Errorf("ยังไม่ได้ติดตั้ง")
 	}
-	for _, name := range []string{"panel", "xray"} {
-		svc, ok := service.ByName(name)
-		if !ok {
-			continue
+	fmt.Println()
+	var steps []progress.Step
+	for _, name := range []string{"xray", "panel"} {
+		if svc, ok := service.ByName(name); ok {
+			steps = append(steps, progress.Step{
+				Label: "Restart hexplus-" + svc.Name,
+				Work:  func() error { return service.Restart(svc) },
+			})
 		}
-		if err := service.Restart(svc); err != nil {
-			fmt.Println(cRedBold + "  " + name + ": " + err.Error() + cReset)
-			continue
-		}
-		fmt.Println(cGrnBold + "  " + name + ": restarted" + cReset)
 	}
+	if err := progress.Run(steps); err != nil {
+		return err
+	}
+	fmt.Println(cGrnBold + "Restart เรียบร้อย" + cReset)
 	return nil
 }
 
@@ -266,36 +285,41 @@ func runPanelEnableMenu(_ *bufio.Reader) error {
 	if !panel.IsInstalled() {
 		return fmt.Errorf("ยังไม่ได้ติดตั้ง — เลือก 01 ก่อน")
 	}
+	fmt.Println()
+	var steps []progress.Step
 	for _, name := range []string{"xray", "panel"} {
-		svc, ok := service.ByName(name)
-		if !ok {
-			continue
+		if svc, ok := service.ByName(name); ok {
+			steps = append(steps,
+				progress.Step{Label: "Enable hexplus-" + svc.Name,
+					Work: func() error { return service.Enable(svc) }},
+				progress.Step{Label: "Start hexplus-" + svc.Name,
+					Work: func() error { return service.Start(svc) }},
+			)
 		}
-		if err := service.Enable(svc); err != nil {
-			fmt.Println(cRedBold + "  enable " + name + ": " + err.Error() + cReset)
-			continue
-		}
-		if err := service.Start(svc); err != nil {
-			fmt.Println(cRedBold + "  start " + name + ": " + err.Error() + cReset)
-			continue
-		}
-		fmt.Println(cGrnBold + "  " + name + ": enabled + started" + cReset)
 	}
+	if err := progress.Run(steps); err != nil {
+		return err
+	}
+	fmt.Println(cGrnBold + "เปิดใช้งานเรียบร้อย" + cReset)
 	return nil
 }
 
 func runPanelDisableMenu(_ *bufio.Reader) error {
+	fmt.Println()
+	var steps []progress.Step
 	for _, name := range []string{"panel", "xray"} {
-		svc, ok := service.ByName(name)
-		if !ok {
-			continue
+		if svc, ok := service.ByName(name); ok {
+			steps = append(steps,
+				progress.Step{Label: "Stop hexplus-" + svc.Name,
+					Work: func() error { _ = service.Stop(svc); return nil }},
+				progress.Step{Label: "Disable hexplus-" + svc.Name,
+					Work: func() error { return service.Disable(svc) }},
+			)
 		}
-		_ = service.Stop(svc)
-		if err := service.Disable(svc); err != nil {
-			fmt.Println(cRedBold + "  disable " + name + ": " + err.Error() + cReset)
-			continue
-		}
-		fmt.Println(cGrnBold + "  " + name + ": stopped + disabled" + cReset)
 	}
+	if err := progress.Run(steps); err != nil {
+		return err
+	}
+	fmt.Println(cGrnBold + "ปิดบริการเรียบร้อย" + cReset)
 	return nil
 }
