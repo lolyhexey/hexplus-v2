@@ -48,6 +48,14 @@ type Config struct {
 	// AllowedHosts is the prefix whitelist for X-Real-Host values.
 	// Empty -> default set ('127.0.0.1', '0.0.0.0', 'localhost').
 	AllowedHosts []string `json:"allowed_hosts,omitempty"`
+
+	// Verbose turns on per-block traffic dumping. When on, every read
+	// from either side is logged as a hex-escaped ASCII preview (first
+	// 512 B per block).  Off by default because a busy proxy at
+	// several MB/s will flood journald.  Toggle it from the SOCKS menu
+	// per slot when investigating a client that isn't tunnelling as
+	// expected.
+	Verbose bool `json:"verbose,omitempty"`
 }
 
 // DB is the on-disk store.

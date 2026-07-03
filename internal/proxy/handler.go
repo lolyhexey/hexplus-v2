@@ -137,7 +137,17 @@ func (h *Handler) Serve(ctx context.Context) error {
 }
 
 // handleConn owns one client connection from accept to close.
+// Logs are emitted at the four hinge points a proxy operator wants to
+// see in journalctl:
+//   ACCEPT — a client TCP handshake landed
+//   403    — the client asked for a non-allowed X-Real-Host
+//   502    — the upstream dial failed
+//   CLOSE  — the bridge finished, with byte totals + duration
+// The name = h.cfg.Name prefix on every line makes it grep-friendly
+// even when multiple proxies share the same journal.
 func (h *Handler) handleConn(client net.Conn) {
+	start := time.Now()
+	clientAddr := client.RemoteAddr().String()
 	defer client.Close()
 	tuneTCP(client)
 
@@ -167,6 +177,21 @@ func (h *Handler) handleConn(client net.Conn) {
 		hostPort = h.cfg.DefaultHost
 	}
 
+	target := hostPort
+	via := "default"
+	if fromClient {
+		via = "x-real-host"
+	}
+	log.Printf("hexplus-proxy[%s]: ACCEPT %s → %s (%s)", h.cfg.Name, clientAddr, target, via)
+
+	// Always dump the initial header buffer — this is where the HTTP
+	// request line, custom headers, and X-Real-Host live and is the
+	// first thing operators want to see when a client isn't behaving.
+	// Preview is bounded so a pipelined 16 KB blob doesn't fill the
+	// journal with a single line.
+	log.Printf("hexplus-proxy[%s]: HEADER %s (%dB) %q",
+		h.cfg.Name, clientAddr, n, previewBytes(header, 1024))
+
 	// Restrict X-Real-Host to the same hosts v1 ALLOWED_PREFIXES enforced,
 	// but compare on the host half of "host:port" with an exact match —
 	// not a prefix — so "127.0.0.1.evil.com:22" can't slip through.
@@ -183,6 +208,8 @@ func (h *Handler) handleConn(client net.Conn) {
 			host = hostPort
 		}
 		if !allowedHosts[strings.ToLower(host)] {
+			log.Printf("hexplus-proxy[%s]: 403 %s → %s (host not on allowlist)",
+				h.cfg.Name, clientAddr, hostPort)
 			_, _ = client.Write([]byte("HTTP/1.1 403 Forbidden!\r\n\r\n"))
 			return
 		}
@@ -192,15 +219,17 @@ func (h *Handler) handleConn(client net.Conn) {
 	dialCtx, cancel := context.WithTimeout(context.Background(), dialTimeout)
 	defer cancel()
 	var d net.Dialer
-	target, err := d.DialContext(dialCtx, "tcp", hostPort)
+	upstream, err := d.DialContext(dialCtx, "tcp", hostPort)
 	if err != nil {
+		log.Printf("hexplus-proxy[%s]: 502 %s → %s: %v",
+			h.cfg.Name, clientAddr, hostPort, err)
 		// Map the failure into an HTTP-shaped response so injector apps
 		// can render something useful instead of just timing out.
 		_, _ = client.Write([]byte("HTTP/1.1 502 Bad Gateway\r\n\r\n"))
 		return
 	}
-	defer target.Close()
-	tuneTCP(target)
+	defer upstream.Close()
+	tuneTCP(upstream)
 
 	// Hand the client the spoof status line. Some apps then immediately
 	// start sending the tunneled protocol bytes - we already have the
@@ -212,24 +241,106 @@ func (h *Handler) handleConn(client net.Conn) {
 	// Bridge in both directions. We use io.Copy which on Linux ends up
 	// calling splice(2) when both endpoints are TCP - kernel handles
 	// the byte shuffle without us round-tripping through userspace.
-	done := make(chan struct{}, 2)
+	// Verbose mode wraps the source ends with tapReader so every block
+	// gets logged; that costs the splice fast-path but is what the
+	// operator asked for when they flipped the switch.
+	type direction struct {
+		bytes int64
+		err   error
+	}
+	done := make(chan direction, 2)
+	var cIn, cOut io.Reader = client, upstream
+	if h.cfg.Verbose {
+		cIn = &tapReader{r: client, tag: "REQ→", name: h.cfg.Name, peer: clientAddr}
+		cOut = &tapReader{r: upstream, tag: "RES←", name: h.cfg.Name, peer: clientAddr}
+	}
 	go func() {
-		_, _ = io.Copy(target, client)
-		// half-close so the peer sees EOF on its side
-		if tc, ok := target.(*net.TCPConn); ok {
+		n, err := io.Copy(upstream, cIn)
+		if tc, ok := upstream.(*net.TCPConn); ok {
 			_ = tc.CloseWrite()
 		}
-		done <- struct{}{}
+		done <- direction{bytes: n, err: err}
 	}()
 	go func() {
-		_, _ = io.Copy(client, target)
+		n, err := io.Copy(client, cOut)
 		if tc, ok := client.(*net.TCPConn); ok {
 			_ = tc.CloseWrite()
 		}
-		done <- struct{}{}
+		done <- direction{bytes: n, err: err}
 	}()
-	<-done
-	<-done
+	up := <-done
+	down := <-done
+	log.Printf("hexplus-proxy[%s]: CLOSE %s → %s  ↑%s ↓%s  %s",
+		h.cfg.Name, clientAddr, hostPort,
+		humanBytes(up.bytes), humanBytes(down.bytes),
+		time.Since(start).Round(time.Millisecond))
+}
+
+// tapReader wraps an io.Reader so every successful Read gets a
+// journal line with an ASCII-safe preview of the block.  Used only
+// when Config.Verbose is true — the extra userspace round-trip kills
+// splice(2)'s zero-copy path.
+type tapReader struct {
+	r    io.Reader
+	tag  string
+	name string
+	peer string
+}
+
+func (t *tapReader) Read(p []byte) (int, error) {
+	n, err := t.r.Read(p)
+	if n > 0 {
+		log.Printf("hexplus-proxy[%s]: %s %s (%dB) %q",
+			t.name, t.tag, t.peer, n, previewBytes(p[:n], 512))
+	}
+	return n, err
+}
+
+// previewBytes renders up to `limit` bytes of buf as an ASCII-safe
+// preview: printable characters pass through, CR/LF become "\r"/"\n",
+// everything else becomes "\xNN".  Used by the header dump and by
+// verbose-mode block logging.
+func previewBytes(buf []byte, limit int) string {
+	if len(buf) > limit {
+		buf = buf[:limit]
+	}
+	var sb strings.Builder
+	sb.Grow(len(buf) * 2)
+	for _, b := range buf {
+		switch {
+		case b == '\r':
+			sb.WriteString(`\r`)
+		case b == '\n':
+			sb.WriteString(`\n`)
+		case b == '\t':
+			sb.WriteString(`\t`)
+		case b == '\\':
+			sb.WriteString(`\\`)
+		case b >= 32 && b < 127:
+			sb.WriteByte(b)
+		default:
+			fmt.Fprintf(&sb, `\x%02x`, b)
+		}
+	}
+	return sb.String()
+}
+
+// humanBytes formats a byte count as B/KB/MB/GB, matching what the
+// panel dashboard shows so operators reading journalctl and the web UI
+// see the same units.
+func humanBytes(n int64) string {
+	const k = 1024
+	if n < k {
+		return fmt.Sprintf("%dB", n)
+	}
+	units := []string{"KB", "MB", "GB", "TB"}
+	div := int64(k)
+	i := 0
+	for n/div >= k && i < len(units)-1 {
+		div *= k
+		i++
+	}
+	return fmt.Sprintf("%.1f%s", float64(n)/float64(div), units[i])
 }
 
 // tuneTCP disables Nagle's algorithm and enables TCP keepalive on the

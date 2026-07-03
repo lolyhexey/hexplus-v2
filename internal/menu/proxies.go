@@ -26,8 +26,10 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"os/signal"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 	"unicode"
 
@@ -119,6 +121,18 @@ func runProxies(r *bufio.Reader) error {
 			proxyRestartSlot(r, db, &proxySlots[1])
 		case "7":
 			proxyRestartSlot(r, db, &proxySlots[2])
+		case "8":
+			proxyShowLogs(r, db, &proxySlots[0])
+		case "9":
+			proxyShowLogs(r, db, &proxySlots[1])
+		case "10":
+			proxyShowLogs(r, db, &proxySlots[2])
+		case "11":
+			proxyToggleVerbose(r, &proxySlots[0])
+		case "12":
+			proxyToggleVerbose(r, &proxySlots[1])
+		case "13":
+			proxyToggleVerbose(r, &proxySlots[2])
 		default:
 			fmt.Println("\n" + cRedBold + "[ผิดพลาด]" + cYelBold + " ตัวเลือกไม่ถูกต้อง" + cReset)
 			waitEnter(r)
@@ -165,7 +179,7 @@ func paintSocksList(db *proxy.DB) {
 	for _, s := range proxySlots {
 		entries := slotEntries(db, &s)
 		if len(entries) == 0 {
-			fmt.Printf("  \033[1;31m○\033[0m \033[1;33m%s\033[0m\n", s.label)
+			fmt.Printf("  \033[1;31m○\033[0m \033[1;33m%-18s\033[0m\n", s.label)
 			continue
 		}
 		anyUp := false
@@ -185,7 +199,14 @@ func paintSocksList(db *proxy.DB) {
 		if !anyUp {
 			slotM = "\033[1;31m○\033[0m"
 		}
-		fmt.Printf("  %s \033[1;33m%s\033[0m  %s\n", slotM, s.label, strings.Join(ports, "  "))
+		// verbose is slot-wide (all ports flip together via the toggle
+		// menu), so reading the flag off the first entry is enough.
+		verbose := "\033[0;37mv ○\033[0m"
+		if entries[0].Verbose {
+			verbose = "\033[1;33mv ◉\033[0m"
+		}
+		fmt.Printf("  %s \033[1;33m%-18s\033[0m [%s]  %s\n",
+			slotM, s.label, verbose, strings.Join(ports, "  "))
 	}
 }
 
@@ -229,6 +250,12 @@ func paintSocksMenu() {
 		{"5", "รีสตาร์ท SOCKS SSH"},
 		{"6", "รีสตาร์ท WEBSOCKET"},
 		{"7", "รีสตาร์ท SOCKS OPENVPN"},
+		{"8", "ดู log SOCKS SSH"},
+		{"9", "ดู log WEBSOCKET"},
+		{"10", "ดู log SOCKS OPENVPN"},
+		{"11", "เปิด/ปิด verbose SOCKS SSH"},
+		{"12", "เปิด/ปิด verbose WEBSOCKET"},
+		{"13", "เปิด/ปิด verbose SOCKS OPENVPN"},
 	}
 	for _, it := range items {
 		fmt.Printf("\033[1;31m[\033[1;36m%s\033[1;31m] \033[1;37m• \033[1;33m%s\033[0m\n", it.idx, it.label)
@@ -237,6 +264,158 @@ func paintSocksMenu() {
 	fmt.Println()
 	printSep()
 	fmt.Print("\033[1;32mเลือกตัวเลือก \033[1;33m?\033[1;37m ")
+}
+
+// proxyToggleVerbose flips Config.Verbose for every port under the
+// slot, saves the DB, and restarts each unit so the change takes
+// effect immediately.  Verbose logs every read block from both
+// directions to journalctl — useful when debugging a client that
+// isn't tunnelling as expected, off by default because it floods
+// under real traffic.
+func proxyToggleVerbose(r *bufio.Reader, s *proxySlot) {
+	clearScreen()
+	paintTitleBar("        verbose " + s.label + "        ")
+	fmt.Println()
+
+	db, err := proxy.Load()
+	if err != nil {
+		fmt.Println(cRedBold + "[ผิดพลาด] " + cYelBold + err.Error() + cReset)
+		waitEnter(r)
+		return
+	}
+	entries := slotEntries(db, s)
+	if len(entries) == 0 {
+		fmt.Println(cYelBold + "  ยังไม่ได้ติดตั้ง " + s.label + cReset)
+		waitEnter(r)
+		return
+	}
+
+	// Toggle relative to the FIRST entry — verbose is slot-wide, not
+	// per-port, so users don't get 'some ports verbose, some not'.
+	nextVerbose := !entries[0].Verbose
+
+	for _, e := range entries {
+		e.Verbose = nextVerbose
+		db.Proxies[e.Name] = e
+	}
+	if err := db.Save(); err != nil {
+		fmt.Println(cRedBold + "[ผิดพลาด] " + cYelBold + err.Error() + cReset)
+		waitEnter(r)
+		return
+	}
+
+	state := "ปิด"
+	color := cRedBold
+	if nextVerbose {
+		state = "เปิด"
+		color = cGrnBold
+	}
+	fmt.Printf("%sverbose:%s %s%s%s\n", cYelBold, cReset, color, state, cReset)
+	fmt.Println()
+
+	// Restart each port so the running process picks up the new flag.
+	// Running processes hold their own Config copy; the toggle is
+	// only observed after a fresh Serve() start.
+	var steps []progress.Step
+	for _, e := range entries {
+		e := e
+		steps = append(steps, progress.Step{
+			Label: "Restart hexplus-proxy-" + e.Name,
+			Work:  func() error { return exec.Command("systemctl", "restart", e.UnitName()).Run() },
+		})
+	}
+	if err := progress.Run(steps); err != nil {
+		fmt.Println(cRedBold + "[ผิดพลาด] " + cYelBold + err.Error() + cReset)
+	} else {
+		if nextVerbose {
+			fmt.Println(cGrnBold + "Verbose เปิดแล้ว — ดู log ได้จากเมนู 8/9/10 หรือ journalctl -f" + cReset)
+			fmt.Println(cYelBold + "  หมายเหตุ: verbose ทำให้ journal โตเร็ว - ปิดเมื่อ debug เสร็จ" + cReset)
+		} else {
+			fmt.Println(cGrnBold + "Verbose ปิดแล้ว — จะ log แค่ ACCEPT/403/502/CLOSE + HEADER" + cReset)
+		}
+	}
+	waitEnter(r)
+}
+
+// proxyShowLogs streams journalctl for every hexplus-proxy-* unit that
+// belongs to a given slot. When multiple ports are configured under the
+// same slot (SOCKS SSH on 8880 + 5555 + …) the tail is unified so the
+// operator sees interleaved logs from every port in a single view.
+//
+// Two viewing modes:
+//   snapshot: -n 200 --no-pager, returns immediately
+//   realtime: -f (follow), streams live until the operator hits Ctrl+C
+func proxyShowLogs(r *bufio.Reader, db *proxy.DB, s *proxySlot) {
+	clearScreen()
+	paintTitleBar("            log " + s.label + "            ")
+	fmt.Println()
+
+	entries := slotEntries(db, s)
+	if len(entries) == 0 {
+		fmt.Println(cYelBold + "  ยังไม่ได้ติดตั้ง " + s.label + cReset)
+		waitEnter(r)
+		return
+	}
+
+	fmt.Printf("%sรวมพอร์ต:%s ", cYelBold, cReset)
+	for i, e := range entries {
+		if i > 0 {
+			fmt.Print(", ")
+		}
+		fmt.Printf("%s%d%s", cCyanBold, e.Port, cReset)
+	}
+	fmt.Print("\n\n")
+
+	fmt.Print(cGrnBold + "[1]" + cReset + " snapshot 200 บรรทัดล่าสุด    " +
+		cGrnBold + "[2]" + cReset + " realtime tail (Ctrl+C ออก)\n")
+	fmt.Print(cYelBold + "เลือก (default = 1): " + cReset)
+	line, _ := r.ReadString('\n')
+	mode := strings.TrimSpace(line)
+	realtime := mode == "2"
+
+	args := []string{"--no-pager", "--output=short-iso"}
+	if realtime {
+		args = append(args, "-f", "-n", "50")
+	} else {
+		args = append(args, "-n", "200")
+	}
+	for _, e := range entries {
+		args = append(args, "-u", e.UnitName())
+	}
+
+	fmt.Println()
+	if realtime {
+		fmt.Println(cCyanBold + "── realtime — กด Ctrl+C เพื่อออก ─────────────" + cReset)
+	}
+
+	cmd := exec.Command("journalctl", args...)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	// journalctl -f blocks on SIGINT gracefully — Ctrl+C hits both
+	// hexplus (which we ignore for the duration of this child) and
+	// the child, which exits 0. Rewire the signal so the parent
+	// process doesn't die when the operator hits Ctrl+C.
+	if realtime {
+		sigCh := make(chan os.Signal, 1)
+		signal.Notify(sigCh, syscall.SIGINT)
+		defer signal.Stop(sigCh)
+		go func() {
+			<-sigCh
+			if cmd.Process != nil {
+				_ = cmd.Process.Signal(syscall.SIGTERM)
+			}
+		}()
+	}
+	if err := cmd.Run(); err != nil {
+		// exit code 130 (128+SIGINT) is expected on realtime Ctrl+C;
+		// don't paint it as an error.
+		if !realtime || cmd.ProcessState == nil || cmd.ProcessState.ExitCode() != 130 {
+			fmt.Println("\n" + cRedBold + "[ผิดพลาด] " + cYelBold + err.Error() + cReset)
+		}
+	}
+	fmt.Println()
+	fmt.Println(cYelBold + "  (ดูจาก shell: journalctl -f -u " + entries[0].UnitName() + ")" + cReset)
+	waitEnter(r)
 }
 
 // proxyToggle shows a submenu: add new port OR remove an existing one.
