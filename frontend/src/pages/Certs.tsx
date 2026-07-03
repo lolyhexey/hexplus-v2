@@ -22,6 +22,7 @@ export default function CertsPage() {
   const [messageApi, contextHolder] = message.useMessage()
   const [rows, setRows] = useState<Cert[]>([])
   const [loading, setLoading] = useState(true)
+  const [rowBusyId, setRowBusyId] = useState<number | null>(null)
   const [dialogOpen, setDialogOpen] = useState(false)
 
   const refresh = useCallback(async () => {
@@ -33,17 +34,21 @@ export default function CertsPage() {
 
   const remove = useCallback(async (row: Cert) => {
     if (!confirm(`ลบ cert ของ "${row.domain}"?`)) return
-    try { await API.certs.remove(row.id); messageApi.success('deleted'); refresh() }
+    setRowBusyId(row.id)
+    try { await API.certs.remove(row.id); messageApi.success('deleted'); await refresh() }
     catch (e) { messageApi.error(String(e)) }
+    finally { setRowBusyId(null) }
   }, [messageApi, refresh])
 
   const renew = useCallback(async (row: Cert) => {
+    setRowBusyId(row.id)
     try {
       messageApi.loading({ content: 'Renewing…', key: 'renew', duration: 0 })
       await API.certs.renew(row.id)
       messageApi.success({ content: 'Renewed', key: 'renew' })
-      refresh()
+      await refresh()
     } catch (e) { messageApi.error({ content: String(e), key: 'renew' }) }
+    finally { setRowBusyId(null) }
   }, [messageApi, refresh])
 
   const totals = useMemo(() => {
@@ -105,12 +110,12 @@ export default function CertsPage() {
               if (key === 'delete') remove(row)
             }
           }}>
-            <Button size="small" icon={<MoreOutlined />} />
+            <Button size="small" icon={<MoreOutlined />} loading={rowBusyId === row.id} />
           </Dropdown>
         )
       },
     },
-  ], [remove, renew])
+  ], [remove, renew, rowBusyId])
 
   return (
     <ConfigProvider theme={{

@@ -47,6 +47,8 @@ export default function InboundsPage() {
   const [rows, setRows] = useState<Inbound[]>([])
   const [selectedKeys, setSelectedKeys] = useState<number[]>([])
   const [loading, setLoading] = useState(true)
+  const [rowBusyId, setRowBusyId] = useState<number | null>(null)
+  const [bulkBusy, setBulkBusy] = useState(false)
   const [dialogOpen, setDialogOpen] = useState(false)
   const [editing, setEditing] = useState<Inbound | null>(null)
   const [infoRow, setInfoRow] = useState<Inbound | null>(null)
@@ -96,17 +98,23 @@ export default function InboundsPage() {
       case 'clients': navigate(`/inbounds/${row.id}/clients`); break
       case 'delete':
         if (!confirm(`ลบ inbound "${row.tag}"?`)) return
-        await API.inbounds.remove(row.id)
-        messageApi.success('deleted')
-        refresh()
+        setRowBusyId(row.id)
+        try {
+          await API.inbounds.remove(row.id)
+          messageApi.success('deleted')
+          await refresh()
+        } catch (e) { messageApi.error(String(e)) }
+        finally { setRowBusyId(null) }
         break
       case 'reset':
         if (!confirm(`Reset traffic ของ "${row.tag}" ให้เป็น 0?`)) return
+        setRowBusyId(row.id)
         try {
           await API.inbounds.resetTraffic(row.id)
           messageApi.success('traffic reset')
-          refresh()
+          await refresh()
         } catch (e) { messageApi.error(String(e)) }
+        finally { setRowBusyId(null) }
         break
       case 'info':
       case 'qr':
@@ -118,10 +126,14 @@ export default function InboundsPage() {
   const bulkDelete = useCallback(async () => {
     if (selectedKeys.length === 0) return
     if (!confirm(`ลบ inbound ${selectedKeys.length} รายการ?`)) return
-    await Promise.all(selectedKeys.map((id) => API.inbounds.remove(id)))
-    messageApi.success(`deleted ${selectedKeys.length}`)
-    setSelectedKeys([])
-    refresh()
+    setBulkBusy(true)
+    try {
+      await Promise.all(selectedKeys.map((id) => API.inbounds.remove(id)))
+      messageApi.success(`deleted ${selectedKeys.length}`)
+      setSelectedKeys([])
+      await refresh()
+    } catch (e) { messageApi.error(String(e)) }
+    finally { setBulkBusy(false) }
   }, [selectedKeys, messageApi, refresh])
 
   const columns: TableColumnsType<Inbound> = useMemo(() => [
@@ -173,11 +185,11 @@ export default function InboundsPage() {
       render: (_: unknown, row) => (
         <Dropdown menu={{ items: rowMenu(row), onClick: (info) => onRowAction(info, row) }}
                   trigger={['click']} placement="bottomRight">
-          <Button size="small" icon={<MenuOutlined />} />
+          <Button size="small" icon={<MenuOutlined />} loading={rowBusyId === row.id} />
         </Dropdown>
       ),
     },
-  ], [onRowAction, toggleEnable])
+  ], [onRowAction, toggleEnable, rowBusyId])
 
   const doExport = useCallback(() => {
     // Full-page navigate so the browser downloads the file with the
@@ -187,14 +199,16 @@ export default function InboundsPage() {
 
   const doResetAll = useCallback(async () => {
     if (!confirm(`Reset traffic ของ ${rows.length} inbounds ทั้งหมด?`)) return
+    setBulkBusy(true)
     try {
       const r = await API.inbounds.resetAllTraffic()
       messageApi.success(`reset ${r.count} inbounds`)
       if (Object.keys(r.failed).length) {
         messageApi.warning(`${Object.keys(r.failed).length} failed`)
       }
-      refresh()
+      await refresh()
     } catch (e) { messageApi.error(String(e)) }
+    finally { setBulkBusy(false) }
   }, [rows.length, messageApi, refresh])
 
   const generalActions: MenuProps = {
@@ -272,7 +286,7 @@ export default function InboundsPage() {
                                style={{ marginInlineEnd: 0 }}>
                             {selectedKeys.length} selected
                           </Tag>
-                          <Button danger icon={<DeleteOutlined />} onClick={bulkDelete}>
+                          <Button danger icon={<DeleteOutlined />} loading={bulkBusy} onClick={bulkDelete}>
                             Delete
                           </Button>
                         </>

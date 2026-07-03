@@ -22,6 +22,7 @@ export default function RoutingPage() {
   const [rows, setRows] = useState<Rule[]>([])
   const [outboundTags, setOutboundTags] = useState<string[]>([])
   const [loading, setLoading] = useState(true)
+  const [rowBusyId, setRowBusyId] = useState<number | null>(null)
   const [dialogOpen, setDialogOpen] = useState(false)
   const [editing, setEditing] = useState<Rule | null>(null)
 
@@ -42,8 +43,10 @@ export default function RoutingPage() {
 
   const remove = useCallback(async (row: Rule) => {
     if (!confirm(`ลบ rule #${row.id}?`)) return
-    try { await API.rules.remove(row.id); messageApi.success('deleted'); refresh() }
+    setRowBusyId(row.id)
+    try { await API.rules.remove(row.id); messageApi.success('deleted'); await refresh() }
     catch (e) { messageApi.error(String(e)) }
+    finally { setRowBusyId(null) }
   }, [messageApi, refresh])
 
   const columns: TableColumnsType<Rule> = useMemo(() => [
@@ -105,12 +108,12 @@ export default function RoutingPage() {
               if (key === 'delete') remove(row)
             }
           }}>
-            <Button size="small" icon={<MoreOutlined />} />
+            <Button size="small" icon={<MoreOutlined />} loading={rowBusyId === row.id} />
           </Dropdown>
         )
       },
     },
-  ], [remove])
+  ], [remove, rowBusyId])
 
   return (
     <ConfigProvider theme={{

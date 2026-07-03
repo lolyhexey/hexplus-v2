@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   Alert, Badge, Button, Card, Col, ConfigProvider, Descriptions, Input, Layout,
-  Radio, Row, Space, Statistic, Tabs, Tag, message, theme as antdTheme,
+  Radio, Row, Space, Spin, Statistic, Tabs, Tag, message, theme as antdTheme,
 } from 'antd'
 import {
   CodeOutlined, CopyOutlined, DownloadOutlined, FileTextOutlined,
@@ -23,42 +23,65 @@ export default function XrayPage() {
   const [status, setStatus] = useState<ServerStatus | null>(null)
   const [config, setConfig] = useState<string>('')
   const [logs, setLogs] = useState<string>('')
+  const [logsLoading, setLogsLoading] = useState(false)
   const [logLines, setLogLines] = useState(200)
   const [tab, setTab] = useState('basic')
+  // Two-phase loading:
+  //   fetched  = false until the first status + config round-trip
+  //              lands, so the whole page shows a centered Spin
+  //              instead of empty cards.
+  //   busy     = true while a mutating call is in flight (restart,
+  //              stop, refresh).  Applied to the outer Spin as well
+  //              so the operator gets clear feedback the request
+  //              is running.
+  const [fetched, setFetched] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [busyLabel, setBusyLabel] = useState('Loading…')
 
-  const refresh = useCallback(async () => {
+  const refresh = useCallback(async (opts?: { silent?: boolean }) => {
+    if (!opts?.silent) { setBusy(true); setBusyLabel('Refreshing…') }
     try {
       const [s, c] = await Promise.all([API.server.status(), API.server.xrayConfig()])
       if (s.success) setStatus(s.obj)
       if (c.success) setConfig(prettyJson(c.obj))
+      setFetched(true)
     } catch (e) { messageApi.error(String(e)) }
+    finally { setBusy(false) }
   }, [messageApi])
 
-  useEffect(() => { refresh() }, [refresh])
+  useEffect(() => { refresh({ silent: true }) }, [refresh])
 
   const restart = useCallback(async () => {
+    setBusy(true); setBusyLabel('Restarting Xray…')
     try {
-      messageApi.loading({ content: 'Restarting…', key: 'xray' })
+      messageApi.loading({ content: 'Restarting…', key: 'xray', duration: 0 })
       await API.server.xrayRestart()
       messageApi.success({ content: 'Xray restarted', key: 'xray' })
-      setTimeout(refresh, 800)
+      await new Promise((r) => setTimeout(r, 800))
+      await refresh({ silent: true })
     } catch (e) { messageApi.error({ content: String(e), key: 'xray' }) }
+    finally { setBusy(false) }
   }, [messageApi, refresh])
 
   const stopXray = useCallback(async () => {
+    setBusy(true); setBusyLabel('Stopping Xray…')
     try {
-      messageApi.loading({ content: 'Stopping…', key: 'xray' })
+      messageApi.loading({ content: 'Stopping…', key: 'xray', duration: 0 })
       await API.server.xrayStop()
       messageApi.success({ content: 'Xray stopped', key: 'xray' })
-      setTimeout(refresh, 500)
+      await new Promise((r) => setTimeout(r, 500))
+      await refresh({ silent: true })
     } catch (e) { messageApi.error({ content: String(e), key: 'xray' }) }
+    finally { setBusy(false) }
   }, [messageApi, refresh])
 
   const fetchLogs = useCallback(async () => {
+    setLogsLoading(true)
     try {
       const r = await API.server.xrayLog(logLines)
       if (r.success) setLogs(r.obj)
     } catch (e) { messageApi.error(String(e)) }
+    finally { setLogsLoading(false) }
   }, [logLines, messageApi])
 
   useEffect(() => { if (tab === 'logs') fetchLogs() }, [tab, fetchLogs])
@@ -93,10 +116,10 @@ export default function XrayPage() {
             </Descriptions.Item>
           </Descriptions>
           <Space style={{ marginTop: 16 }}>
-            <Button type="primary" icon={<ReloadOutlined />} onClick={restart}>
+            <Button type="primary" icon={<ReloadOutlined />} loading={busy} onClick={restart}>
               Restart Xray
             </Button>
-            <Button danger icon={<StopOutlined />} onClick={stopXray}>
+            <Button danger icon={<StopOutlined />} loading={busy} onClick={stopXray}>
               Stop
             </Button>
           </Space>
@@ -163,7 +186,7 @@ export default function XrayPage() {
                   }}>
             Download
           </Button>
-          <Button icon={<ReloadOutlined />} onClick={refresh}>Refresh</Button>
+          <Button icon={<ReloadOutlined />} loading={busy} onClick={() => refresh()}>Refresh</Button>
         </Space>
       }
     >
@@ -197,19 +220,21 @@ export default function XrayPage() {
           <Radio.Group value={logLines} onChange={(e) => setLogLines(e.target.value)}
                         optionType="button" buttonStyle="solid" size="small"
                         options={[100, 200, 500, 1000].map((n) => ({ value: n, label: `${n} lines` }))} />
-          <Button icon={<ReloadOutlined />} onClick={fetchLogs}>Refresh</Button>
+          <Button icon={<ReloadOutlined />} loading={logsLoading} onClick={fetchLogs}>Refresh</Button>
         </Space>
       }
     >
-      <Input.TextArea
-        value={logs || '(no logs)'}
-        readOnly
-        rows={22}
-        style={{
-          fontFamily: 'ui-monospace, SF Mono, Consolas, Menlo, monospace',
-          fontSize: 12, background: 'rgba(0,0,0,0.02)',
-        }}
-      />
+      <Spin spinning={logsLoading} tip="Loading logs…">
+        <Input.TextArea
+          value={logs || '(no logs)'}
+          readOnly
+          rows={22}
+          style={{
+            fontFamily: 'ui-monospace, SF Mono, Consolas, Menlo, monospace',
+            fontSize: 12, background: 'rgba(0,0,0,0.02)',
+          }}
+        />
+      </Spin>
     </Card>
   )
 
@@ -223,16 +248,22 @@ export default function XrayPage() {
         <AppSidebar />
         <Layout>
           <Layout.Content style={{ padding: 16 }}>
-            <Tabs
-              activeKey={tab}
-              onChange={setTab}
-              type="card"
-              items={[
-                { key: 'basic',  label: 'Basic',        children: basicTab },
-                { key: 'config', label: 'Config',       children: configTab },
-                { key: 'logs',   label: 'Logs',         children: logsTab },
-              ]}
-            />
+            <Spin spinning={!fetched || busy} tip={busyLabel} size="large" delay={200}>
+              {fetched ? (
+                <Tabs
+                  activeKey={tab}
+                  onChange={setTab}
+                  type="card"
+                  items={[
+                    { key: 'basic',  label: 'Basic',        children: basicTab },
+                    { key: 'config', label: 'Config',       children: configTab },
+                    { key: 'logs',   label: 'Logs',         children: logsTab },
+                  ]}
+                />
+              ) : (
+                <div style={{ minHeight: 320 }} />
+              )}
+            </Spin>
           </Layout.Content>
         </Layout>
       </Layout>

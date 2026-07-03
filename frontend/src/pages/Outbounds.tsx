@@ -31,6 +31,7 @@ export default function OutboundsPage() {
   const [busyWarp, setBusyWarp] = useState(false)
   const [editing, setEditing] = useState<Outbound | null>(null)
   const [createOpen, setCreateOpen] = useState(false)
+  const [rowBusyId, setRowBusyId] = useState<number | null>(null)
 
   const refresh = useCallback(async () => {
     try {
@@ -53,8 +54,10 @@ export default function OutboundsPage() {
 
   const remove = useCallback(async (row: Outbound) => {
     if (!confirm(`ลบ outbound "${row.tag}"?`)) return
-    try { await API.outbounds.remove(row.id); messageApi.success('deleted'); refresh() }
+    setRowBusyId(row.id)
+    try { await API.outbounds.remove(row.id); messageApi.success('deleted'); await refresh() }
     catch (e) { messageApi.error(String(e)) }
+    finally { setRowBusyId(null) }
   }, [messageApi, refresh])
 
   const columns: TableColumnsType<Outbound> = useMemo(() => [
@@ -96,12 +99,12 @@ export default function OutboundsPage() {
               if (key === 'delete') remove(row)
             }
           }}>
-            <Button size="small" icon={<MoreOutlined />} />
+            <Button size="small" icon={<MoreOutlined />} loading={rowBusyId === row.id} />
           </Dropdown>
         )
       },
     },
-  ], [remove])
+  ], [remove, rowBusyId])
 
   return (
     <ConfigProvider theme={{

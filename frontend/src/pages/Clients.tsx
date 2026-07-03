@@ -47,6 +47,7 @@ export default function ClientsPage() {
   const [bulkAddOpen, setBulkAddOpen] = useState(false)
   const [bulkAdjustOpen, setBulkAdjustOpen] = useState(false)
   const [selectedKeys, setSelectedKeys] = useState<number[]>([])
+  const [rowBusyId, setRowBusyId] = useState<number | null>(null)
 
   const refresh = useCallback(async () => {
     try {
@@ -75,19 +76,25 @@ export default function ClientsPage() {
   }, [rows])
 
   const toggle = useCallback(async (row: Client) => {
-    try { await API.clients.toggle(row.id); refresh() }
+    setRowBusyId(row.id)
+    try { await API.clients.toggle(row.id); await refresh() }
     catch (e) { messageApi.error(String(e)) }
+    finally { setRowBusyId(null) }
   }, [refresh, messageApi])
 
   const resetTraffic = useCallback(async (row: Client) => {
-    try { await API.clients.reset(row.id); messageApi.success('reset'); refresh() }
+    setRowBusyId(row.id)
+    try { await API.clients.reset(row.id); messageApi.success('reset'); await refresh() }
     catch (e) { messageApi.error(String(e)) }
+    finally { setRowBusyId(null) }
   }, [refresh, messageApi])
 
   const remove = useCallback(async (row: Client) => {
     if (!confirm(`ลบ client "${row.email}"?`)) return
-    try { await API.clients.remove(row.id); messageApi.success('deleted'); refresh() }
+    setRowBusyId(row.id)
+    try { await API.clients.remove(row.id); messageApi.success('deleted'); await refresh() }
     catch (e) { messageApi.error(String(e)) }
+    finally { setRowBusyId(null) }
   }, [refresh, messageApi])
 
   const openQR = useCallback(async (row: Client) => {
@@ -180,12 +187,12 @@ export default function ClientsPage() {
               }
             }
           }} trigger={['click']} placement="bottomRight">
-            <Button size="small" icon={<MoreOutlined />} />
+            <Button size="small" icon={<MoreOutlined />} loading={rowBusyId === row.id} />
           </Dropdown>
         )
       },
     },
-  ], [messageApi, openQR, remove, resetTraffic, toggle])
+  ], [messageApi, openQR, remove, resetTraffic, toggle, rowBusyId])
 
   return (
     <ConfigProvider theme={{
