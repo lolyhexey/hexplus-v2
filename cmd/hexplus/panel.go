@@ -82,14 +82,16 @@ func runPanelInstall(args []string) {
 	fmt.Printf("  URL:      http://<server-ip>:%d%s/\n", res.Port, res.URLPrefix)
 	fmt.Printf("  user:     %s\n", res.AdminUsername)
 	fmt.Printf("  password: %s\n", res.AdminPassword)
+	if res.Started {
+		fmt.Println("  status:   running (hexplus-xray + hexplus-panel enabled + started)")
+	} else {
+		fmt.Println("  status:   units written but not started — bring them up manually:")
+		fmt.Println("            systemctl enable --now hexplus-xray hexplus-panel")
+	}
 	fmt.Println()
 	fmt.Println("The panel is HTTP-only. Recommended: reach it via SSH tunnel")
-	fmt.Println("  ssh -L", res.Port, ":localhost:", res.Port, " <user>@<server>")
+	fmt.Printf("  ssh -L %d:localhost:%d <user>@<server>\n", res.Port, res.Port)
 	fmt.Println("or place it behind a reverse proxy (Cloudflare, nginx) that terminates TLS.")
-	fmt.Println()
-	fmt.Println("Enable and start now:")
-	fmt.Println("  hexplus service enable panel")
-	fmt.Println("  hexplus service start  panel")
 }
 
 func runPanelUninstall(args []string) {

@@ -33,6 +33,11 @@ type InstallResult struct {
 	AdminPassword string // generated on empty input; otherwise passthrough
 	WroteConfig   bool
 	WroteUnits    bool
+	// Started is true when both hexplus-xray + hexplus-panel came up
+	// active after enable+start. On boxes without systemd running (a
+	// bare chroot / container without PID 1 systemd) this stays false
+	// and the caller surfaces it as a warning, not an error.
+	Started bool
 }
 
 // Install bootstraps the panel: writes panel.yaml with a fresh URL
@@ -105,6 +110,24 @@ func Install(opts InstallOptions) (InstallResult, error) {
 		return InstallResult{}, fmt.Errorf("install panel: %w", err)
 	}
 
+	// Auto enable+start both units so the operator doesn't need a
+	// follow-up "start it" step. Each stage is best-effort — a
+	// systemd failure surfaces via Started=false, not a hard error,
+	// because the panel + DB are already usable and the operator
+	// can bring the units up manually if needed.
+	started := true
+	if service.SystemdAvailable() {
+		if err := service.Enable(xraySvc); err != nil { started = false }
+		if err := service.Enable(panelSvc); err != nil { started = false }
+		// xray comes up first so the panel finds config.json already
+		// generated (empty inbounds set, but valid) when it starts
+		// polling stats on boot.
+		if err := service.Start(xraySvc); err != nil { started = false }
+		if err := service.Start(panelSvc); err != nil { started = false }
+	} else {
+		started = false
+	}
+
 	return InstallResult{
 		Port:          cfg.Port,
 		URLPrefix:     cfg.URLPrefix,
@@ -112,6 +135,7 @@ func Install(opts InstallOptions) (InstallResult, error) {
 		AdminPassword: opts.AdminPassword,
 		WroteConfig:   true,
 		WroteUnits:    true,
+		Started:       started,
 	}, nil
 }
 

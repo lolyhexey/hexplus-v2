@@ -151,10 +151,13 @@ func runPanelInstallMenu(r *bufio.Reader) error {
 	fmt.Printf("  URL:        %shttp://<server-ip>:%d%s/%s\n", cWhtBold, res.Port, res.URLPrefix, cReset)
 	fmt.Printf("  Admin:      %s%s%s\n", cWhtBold, res.AdminUsername, cReset)
 	fmt.Printf("  รหัสผ่าน:   %s%s%s\n", cYelBold, res.AdminPassword, cReset)
+	if res.Started {
+		fmt.Printf("  สถานะ:      %sทำงาน%s (xray + panel enabled + started อัตโนมัติ)\n", cGrnBold, cReset)
+	} else {
+		fmt.Printf("  สถานะ:      %sยังไม่ start%s — เปิดผ่านเมนู 07 หรือ systemctl\n", cYelBold, cReset)
+	}
 	fmt.Println()
 	fmt.Println(cRedBold + "*** จดรหัสผ่านไว้ที่ไหนก็ได้ — จะไม่โชว์อีก ***" + cReset)
-	fmt.Println()
-	fmt.Println("เปิดใช้งานด้วย: hexplus menu → 10 → 08 → 07 (เปิดบริการ)")
 	return nil
 }
 
