@@ -77,7 +77,7 @@ auth-user-pass-verify /etc/openvpn/hexplus-auth.sh via-file
 
 max-clients 65535
 
-status /var/log/openvpn-status.log
+status /var/log/openvpn-status.log 5
 verb 3
 duplicate-cn
 `
@@ -191,7 +191,7 @@ duplicate-cn
 
 max-clients 65535
 
-status /var/log/openvpn-status.log
+status /var/log/openvpn-status.log 5
 verb 3%s
 `, port, proto, dnsPushLines, authLines, exitNotify)
 
@@ -259,7 +259,7 @@ duplicate-cn
 
 max-clients 65535
 
-status /var/log/openvpn-status%d.log
+status /var/log/openvpn-status%d.log 5
 verb 3%s
 `, id, port, proto, id, 8+id-1, id, dnsLines, authLines, id, exitNotify)
 
