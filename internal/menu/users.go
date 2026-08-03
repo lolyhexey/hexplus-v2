@@ -601,37 +601,44 @@ func runSSHMonitor(r *bufio.Reader) error {
 	return nil
 }
 
-// readSSHTimes returns a map[user]elapsed for the earliest pts/ session
-// of each user, formatted as HH:MM:SS. Parses `who` login timestamps.
-func readSSHTimes() map[string]string {
-	out := map[string]string{}
-	data, err := exec.Command("who").Output()
-	if err != nil {
-		return out
-	}
-	now := time.Now()
-	for _, line := range strings.Split(string(data), "\n") {
-		f := strings.Fields(line)
-		// "user pts/0 2026-06-28 10:00 (ip)"
-		if len(f) < 4 || f[0] == "root" || !strings.HasPrefix(f[1], "pts/") {
+// parseSSHTimes maps each user to their longest-running connection from a
+// `ps -eo etimes=,args=` dump. etimes is elapsed seconds already, so this
+// reads no clock and needs no date-format handling.
+func parseSSHTimes(psOut string) map[string]string {
+	longest := map[string]int{}
+	for _, line := range strings.Split(psOut, "\n") {
+		secsField, args, ok := strings.Cut(strings.TrimSpace(line), " ")
+		if !ok {
 			continue
 		}
-		loginStr := f[2] + " " + f[3]
-		t, err := time.ParseInLocation("2006-01-02 15:04", loginStr, now.Location())
+		user := sshPrivSessionUser(strings.TrimSpace(args))
+		if user == "" || user == "root" {
+			continue
+		}
+		secs, err := strconv.Atoi(secsField)
 		if err != nil {
 			continue
 		}
-		elapsed := now.Sub(t)
-		h := int(elapsed.Hours())
-		m := int(elapsed.Minutes()) % 60
-		s := int(elapsed.Seconds()) % 60
-		ts := fmt.Sprintf("%02d:%02d:%02d", h, m, s)
-		// Keep the earliest (longest) session per user.
-		if prev, exists := out[f[0]]; !exists || ts > prev {
-			out[f[0]] = ts
+		if secs > longest[user] {
+			longest[user] = secs
 		}
 	}
+	out := make(map[string]string, len(longest))
+	for user, secs := range longest {
+		out[user] = fmt.Sprintf("%02d:%02d:%02d", secs/3600, secs/60%60, secs%60)
+	}
 	return out
+}
+
+// readSSHTimes returns a map[user]elapsed for each user's longest-running SSH
+// connection, formatted as HH:MM:SS. Reads ps rather than `who` for the same
+// reason as readSSHLogins: PTY-less tunnel sessions never reach utmp.
+func readSSHTimes() map[string]string {
+	data, err := exec.Command("ps", "-eo", "etimes=,args=").Output()
+	if err != nil {
+		return map[string]string{}
+	}
+	return parseSSHTimes(string(data))
 }
 
 // readOpenVPNTimes returns a map[user]elapsed parsed from "Connected Since"
@@ -713,29 +720,58 @@ func readOpenVPNTimes() map[string]string {
 	return out
 }
 
-// readSSHLogins returns a map[user]count of active SSH sessions by
-// parsing `who` output. On Ubuntu 22+, all sshd child processes run as
-// root so `ps | grep sshd | user!=root` finds nothing. `who` reads
-// /var/run/utmp directly and reliably lists every pts/* session.
+// sshPrivSessionUser returns the login name out of an sshd privilege-separation
+// monitor line, or "" when the line is not one:
+//
+//	sshd: someone [priv]
+//
+// Exactly one such process exists per SSH connection. Lines for the listener,
+// the session children, and connections that have not authenticated yet
+// ("unknown", "[accepted]", "[net]") all fail to match.
+//
+// OpenSSH 9.8 renamed the per-connection binary to sshd-session, so the tag
+// ahead of the colon is accepted in either spelling. Only the sshd form is
+// verified here — the servers this ships to run OpenSSH 8.2.
+func sshPrivSessionUser(args string) string {
+	tag, rest, ok := strings.Cut(args, ": ")
+	if !ok || (tag != "sshd" && tag != "sshd-session") {
+		return ""
+	}
+	user, ok := strings.CutSuffix(rest, " [priv]")
+	if !ok || user == "" || user == "unknown" {
+		return ""
+	}
+	return user
+}
+
+// countSSHPrivSessions merges one `ps -eo args=` dump into per-user counts.
+// Split out from readSSHLogins so the parsing can be tested without a host.
+func countSSHPrivSessions(psOut string, out map[string]int) {
+	for _, line := range strings.Split(psOut, "\n") {
+		user := sshPrivSessionUser(strings.TrimSpace(line))
+		if user == "" || user == "root" {
+			continue
+		}
+		out[user]++
+	}
+}
+
+// readSSHLogins returns a map[user]count of live SSH connections.
+//
+// This counts "sshd: <user> [priv]" processes instead of reading utmp through
+// `who`. sshd only writes a utmp record for sessions that allocate a PTY, and
+// the tunnel clients this product exists to serve request no PTY at all — so
+// `who` reported every single one of them as offline. Counting the privilege-
+// separation monitor also answers what pushed us to `who` in the first place:
+// that process is root-owned on every OpenSSH version, so it does not matter
+// whether the session child runs as the login user or as root.
 func readSSHLogins() map[string]int {
 	out := map[string]int{}
-	data, err := exec.Command("who").Output()
+	data, err := exec.Command("ps", "-eo", "args=").Output()
 	if err != nil {
 		return out
 	}
-	for _, line := range strings.Split(string(data), "\n") {
-		f := strings.Fields(line)
-		// "username  pts/0  2026-06-28 10:00 (ip)"
-		if len(f) < 2 {
-			continue
-		}
-		if f[0] == "root" {
-			continue
-		}
-		if strings.HasPrefix(f[1], "pts/") {
-			out[f[0]]++
-		}
-	}
+	countSSHPrivSessions(string(data), out)
 	return out
 }
 

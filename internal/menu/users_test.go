@@ -53,6 +53,100 @@ const statusV3 = "TITLE\tOpenVPN 2.5.9\n" +
 	"GLOBAL_STATS\tMax bcast/mcast queue length\t0\n" +
 	"END\n"
 
+// Real `ps -eo etimes=,args=` capture from a production box with six tunnel
+// sessions live. Every one of them is PTY-less, which is the whole point: at
+// the moment this was taken `who` listed exactly one line — the operator's own
+// root pts/0 — so the utmp-based count reported all six users as offline.
+const psSSHSessions = `  67485 /usr/local/lib/hexplus/dropbear -F -R -p 110
+  67482 sshd: /usr/sbin/sshd -D [listener] 1 of 10-100 startups
+  67482 sshd: test2 [priv]
+  67481 sshd: root@pts/0
+  67479 sshd: test2
+  67477 sshd: test2 [priv]
+  67475 sshd: test2
+  67474 sshd: test2 [priv]
+  67473 sshd: test2
+  67472 sshd: test2 [priv]
+  67471 sshd: test2
+  67470 sshd: test2 [priv]
+  67469 sshd: test2
+  40412 sshd: test2 [priv]
+  40409 sshd: test2@notty
+    106 sshd: [accepted]
+      0 sshd: root@notty
+`
+
+// Same host, `ps -eo args=`, with a mid-authentication connection and a root
+// login added so the rejection paths are covered.
+const psSSHArgs = `/usr/local/lib/hexplus/dropbear -F -R -p 110
+sshd: /usr/sbin/sshd -D [listener] 1 of 10-100 startups
+sshd: test2 [priv]
+sshd: test2
+sshd: test2 [priv]
+sshd: test2@notty
+sshd: somchai [priv]
+sshd: somchai
+sshd: unknown [priv]
+sshd: unknown [net]
+sshd: [accepted]
+sshd: root [priv]
+sshd: root@pts/0
+`
+
+func TestSSHPrivSessionUser(t *testing.T) {
+	tests := []struct {
+		args string
+		want string
+	}{
+		{"sshd: test2 [priv]", "test2"},
+		{"sshd-session: test2 [priv]", "test2"}, // OpenSSH 9.8 renamed the binary
+		{"sshd: test2", ""},                     // session child, not the monitor
+		{"sshd: test2@notty", ""},
+		{"sshd: unknown [priv]", ""}, // still authenticating
+		{"sshd: unknown [net]", ""},
+		{"sshd: [accepted]", ""},
+		{"sshd: /usr/sbin/sshd -D [listener] 1 of 10-100 startups", ""},
+		{"/usr/local/lib/hexplus/dropbear -F -R -p 110", ""},
+		{"", ""},
+	}
+	for _, tc := range tests {
+		if got := sshPrivSessionUser(tc.args); got != tc.want {
+			t.Errorf("sshPrivSessionUser(%q) = %q, want %q", tc.args, got, tc.want)
+		}
+	}
+}
+
+func TestCountSSHPrivSessions(t *testing.T) {
+	got := map[string]int{}
+	countSSHPrivSessions(psSSHArgs, got)
+
+	want := map[string]int{"test2": 2, "somchai": 1}
+	if len(got) != len(want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+	for user, n := range want {
+		if got[user] != n {
+			t.Errorf("user %q: got %d, want %d (full: %v)", user, got[user], n, got)
+		}
+	}
+}
+
+func TestParseSSHTimes(t *testing.T) {
+	got := parseSSHTimes(psSSHSessions)
+
+	// Longest test2 monitor is 67482s = 18h 44m 42s. The 40412s session and
+	// every non-monitor line must lose to it.
+	if want := "18:44:42"; got["test2"] != want {
+		t.Errorf("test2: got %q, want %q (full: %v)", got["test2"], want, got)
+	}
+	if _, ok := got["root"]; ok {
+		t.Errorf("root should never be reported: %v", got)
+	}
+	if len(got) != 1 {
+		t.Errorf("expected only test2, got %v", got)
+	}
+}
+
 func TestCountOVPNStatus(t *testing.T) {
 	tests := []struct {
 		name string
