@@ -635,7 +635,9 @@ func readSSHTimes() map[string]string {
 }
 
 // readOpenVPNTimes returns a map[user]elapsed parsed from "Connected Since"
-// in the status log (status-version 1 format).
+// in the status log. Handles status-version 2/3 (what serverconf.go writes)
+// via the epoch field, and status-version 1 for installs whose server.conf
+// predates that directive.
 func readOpenVPNTimes() map[string]string {
 	out := map[string]string{}
 	var data []byte
@@ -654,6 +656,32 @@ func readOpenVPNTimes() map[string]string {
 	now := time.Now()
 	inList := false
 	for _, line := range strings.Split(string(data), "\n") {
+		// status-version 2 (comma) / 3 (tab): the CLIENT_LIST row carries an
+		// epoch, so no date-format parsing is needed. Field order per the
+		// binary's own HEADER row:
+		//   [1]=Common Name ... [7]=Connected Since [8]=Connected Since (time_t)
+		sep := ""
+		if strings.HasPrefix(line, "CLIENT_LIST,") {
+			sep = ","
+		} else if strings.HasPrefix(line, "CLIENT_LIST\t") {
+			sep = "\t"
+		}
+		if sep != "" {
+			parts := strings.Split(line, sep)
+			if len(parts) < 9 || parts[1] == "" || parts[1] == "Common Name" {
+				continue
+			}
+			epoch, err := strconv.ParseInt(parts[8], 10, 64)
+			if err != nil {
+				continue
+			}
+			elapsed := now.Sub(time.Unix(epoch, 0))
+			h := int(elapsed.Hours())
+			m := int(elapsed.Minutes()) % 60
+			s := int(elapsed.Seconds()) % 60
+			out[parts[1]] = fmt.Sprintf("%02d:%02d:%02d", h, m, s)
+			continue
+		}
 		if strings.HasPrefix(line, "Common Name,") {
 			inList = true
 			continue
@@ -713,9 +741,11 @@ func readSSHLogins() map[string]int {
 
 // readOpenVPNUsers parses every OpenVPN status log for connected clients
 // and merges the counts: the primary /var/log/openvpn-status.log plus each
-// extra instance's openvpn-status<N>.log. Supports both status-version 1
-// (default, CSV after "Common Name," header) and status-version 2
-// (tab-separated CLIENT_LIST\t rows).
+// extra instance's openvpn-status<N>.log. Supports status-version 1 (CSV
+// after a "Common Name," header), 2 (comma-separated CLIENT_LIST rows —
+// what serverconf.go writes) and 3 (same but tab-separated), so installs
+// upgraded from an older conf keep reporting while their server.conf still
+// says version 1.
 func readOpenVPNUsers() map[string]int {
 	out := map[string]int{}
 	paths, _ := filepath.Glob("/var/log/openvpn-status*.log")
@@ -737,7 +767,16 @@ func readOpenVPNUsers() map[string]int {
 func countOVPNStatus(data string, out map[string]int) {
 	inList := false
 	for _, line := range strings.Split(data, "\n") {
-		// status-version 2: tab-separated
+		// status-version 2: "CLIENT_LIST,<Common Name>,<Real Address>,..."
+		// The header row starts with "HEADER," so it never matches here.
+		if strings.HasPrefix(line, "CLIENT_LIST,") {
+			parts := strings.SplitN(line, ",", 3)
+			if len(parts) >= 2 && parts[1] != "" && parts[1] != "Common Name" {
+				out[parts[1]]++
+			}
+			continue
+		}
+		// status-version 3: identical to 2 but tab-separated
 		if strings.HasPrefix(line, "CLIENT_LIST\t") {
 			parts := strings.SplitN(line, "\t", 3)
 			if len(parts) >= 2 && parts[1] != "Common Name" {
