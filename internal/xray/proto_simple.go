@@ -12,9 +12,9 @@ type HTTPAccount struct {
 
 // HTTPInboundSettings is xray's http inbound settings.
 type HTTPInboundSettings struct {
-	Accounts    []HTTPAccount `json:"accounts,omitempty"`
-	AllowTransparent bool     `json:"allowTransparent,omitempty"`
-	UserLevel   int           `json:"userLevel,omitempty"`
+	Accounts         []HTTPAccount `json:"accounts,omitempty"`
+	AllowTransparent bool          `json:"allowTransparent,omitempty"`
+	UserLevel        int           `json:"userLevel,omitempty"`
 }
 
 func buildHTTPSettings(clients []Client) HTTPInboundSettings {
@@ -39,7 +39,7 @@ type SOCKSAccount struct {
 
 // SOCKSInboundSettings drives xray's socks inbound.
 type SOCKSInboundSettings struct {
-	Auth      string         `json:"auth"`      // "noauth" | "password"
+	Auth      string         `json:"auth"` // "noauth" | "password"
 	Accounts  []SOCKSAccount `json:"accounts,omitempty"`
 	UDP       bool           `json:"udp"`
 	IP        string         `json:"ip,omitempty"`
@@ -69,10 +69,10 @@ func buildSOCKSSettings(clients []Client) SOCKSInboundSettings {
 // door" name = "any door"). Used to expose a fixed upstream through the
 // panel; no per-client credentials.
 type DokodemoInboundSettings struct {
-	Address     string `json:"address"`
-	Port        int    `json:"port"`
-	Network     string `json:"network,omitempty"` // "tcp" | "udp" | "tcp,udp"
-	FollowRedirect bool `json:"followRedirect,omitempty"`
+	Address        string `json:"address"`
+	Port           int    `json:"port"`
+	Network        string `json:"network,omitempty"` // "tcp" | "udp" | "tcp,udp"
+	FollowRedirect bool   `json:"followRedirect,omitempty"`
 }
 
 // buildDokodemoSettings reads the address+port out of the inbound's

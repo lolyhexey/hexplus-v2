@@ -14,14 +14,14 @@ type Hy2Client struct {
 }
 
 type Hy2InboundSettings struct {
-	Password  string      `json:"password,omitempty"` // single-user shorthand
-	Clients   []Hy2Client `json:"users,omitempty"`
-	Obfs      Hy2Obfs     `json:"obfs,omitempty"`
-	IgnoreCC  bool        `json:"ignore_client_bandwidth,omitempty"`
+	Password string      `json:"password,omitempty"` // single-user shorthand
+	Clients  []Hy2Client `json:"users,omitempty"`
+	Obfs     Hy2Obfs     `json:"obfs,omitempty"`
+	IgnoreCC bool        `json:"ignore_client_bandwidth,omitempty"`
 }
 
 type Hy2Obfs struct {
-	Type     string `json:"type,omitempty"`     // "salamander" is the current one
+	Type     string `json:"type,omitempty"` // "salamander" is the current one
 	Password string `json:"password,omitempty"`
 }
 

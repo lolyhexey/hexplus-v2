@@ -21,23 +21,23 @@ import (
 
 // ServerStatus mirrors 3x-ui's Status type used by IndexPage.
 type ServerStatus struct {
-	CPU          Gauge   `json:"cpu"`
-	CPUCores     int     `json:"cpuCores"`
-	LogicalPro   int     `json:"logicalPro"`
-	CPUSpeedMhz  float64 `json:"cpuSpeedMhz"`
-	Mem          MemGauge `json:"mem"`
-	Swap         MemGauge `json:"swap"`
-	Disk         MemGauge `json:"disk"`
-	Xray         XrayInfo `json:"xray"`
-	Uptime       int64   `json:"uptime"`
-	Loads        [3]float64 `json:"loads"`
-	TCPCount     int     `json:"tcpCount"`
-	UDPCount     int     `json:"udpCount"`
-	NetIO        NetIO   `json:"netIO"`
-	NetTraffic   NetTraffic `json:"netTraffic"`
-	PublicIP     PublicIP `json:"publicIP"`
-	AppStats     AppStats `json:"appStats"`
-	OSVersion    string  `json:"osVersion"`
+	CPU         Gauge      `json:"cpu"`
+	CPUCores    int        `json:"cpuCores"`
+	LogicalPro  int        `json:"logicalPro"`
+	CPUSpeedMhz float64    `json:"cpuSpeedMhz"`
+	Mem         MemGauge   `json:"mem"`
+	Swap        MemGauge   `json:"swap"`
+	Disk        MemGauge   `json:"disk"`
+	Xray        XrayInfo   `json:"xray"`
+	Uptime      int64      `json:"uptime"`
+	Loads       [3]float64 `json:"loads"`
+	TCPCount    int        `json:"tcpCount"`
+	UDPCount    int        `json:"udpCount"`
+	NetIO       NetIO      `json:"netIO"`
+	NetTraffic  NetTraffic `json:"netTraffic"`
+	PublicIP    PublicIP   `json:"publicIP"`
+	AppStats    AppStats   `json:"appStats"`
+	OSVersion   string     `json:"osVersion"`
 }
 
 type Gauge struct {
@@ -53,8 +53,8 @@ type MemGauge struct {
 }
 
 type XrayInfo struct {
-	State   string `json:"state"`
-	Version string `json:"version"`
+	State    string `json:"state"`
+	Version  string `json:"version"`
 	ErrorMsg string `json:"errorMsg"`
 }
 
@@ -74,9 +74,9 @@ type PublicIP struct {
 }
 
 type AppStats struct {
-	Threads int    `json:"threads"`
-	Mem     int64  `json:"mem"`
-	Uptime  int64  `json:"uptime"`
+	Threads int   `json:"threads"`
+	Mem     int64 `json:"mem"`
+	Uptime  int64 `json:"uptime"`
 }
 
 func (s *Server) registerServerRoutes(mux *http.ServeMux) {
@@ -138,13 +138,17 @@ func (s *Server) handleXrayLog(w http.ResponseWriter, r *http.Request) {
 func strconvAtoi(s string) (int, error) {
 	var n int
 	for _, r := range s {
-		if r < '0' || r > '9' { return 0, errors.New("bad") }
+		if r < '0' || r > '9' {
+			return 0, errors.New("bad")
+		}
 		n = n*10 + int(r-'0')
 	}
 	return n, nil
 }
 func strconvItoa(n int) string {
-	if n == 0 { return "0" }
+	if n == 0 {
+		return "0"
+	}
 	buf := [16]byte{}
 	i := len(buf)
 	for n > 0 {
@@ -157,9 +161,9 @@ func strconvItoa(n int) string {
 
 func (s *Server) handleServerStatus(w http.ResponseWriter, _ *http.Request) {
 	st := ServerStatus{
-		CPUCores:  runtime.NumCPU(),
+		CPUCores:   runtime.NumCPU(),
 		LogicalPro: runtime.NumCPU(),
-		OSVersion: readOSRelease(),
+		OSVersion:  readOSRelease(),
 	}
 	st.CPU = readCPU()
 	st.CPUSpeedMhz = readCPUFreq()

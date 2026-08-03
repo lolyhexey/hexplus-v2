@@ -35,12 +35,12 @@ const WARPRegAPI = "https://api.cloudflareclient.com/v0a4005/reg"
 // WARPSettings is the outbound.settings shape xray expects for a
 // WireGuard outbound. Exported so api_routing can marshal it.
 type WARPSettings struct {
-	SecretKey  string   `json:"secretKey"`
-	Address    []string `json:"address"`
-	Peers      []WARPPeer `json:"peers"`
-	MTU        int      `json:"mtu,omitempty"`
-	Reserved   []int    `json:"reserved,omitempty"`
-	DomainStrategy string `json:"domainStrategy,omitempty"`
+	SecretKey      string     `json:"secretKey"`
+	Address        []string   `json:"address"`
+	Peers          []WARPPeer `json:"peers"`
+	MTU            int        `json:"mtu,omitempty"`
+	Reserved       []int      `json:"reserved,omitempty"`
+	DomainStrategy string     `json:"domainStrategy,omitempty"`
 }
 
 type WARPPeer struct {
@@ -61,7 +61,7 @@ func ProvisionWARP() (WARPSettings, error) {
 	pubB64 := base64.StdEncoding.EncodeToString(priv.PublicKey().Bytes())
 
 	body := map[string]any{
-		"key":     pubB64,
+		"key":        pubB64,
 		"install_id": "",
 		"fcm_token":  "",
 		"tos":        time.Now().UTC().Format(time.RFC3339Nano),

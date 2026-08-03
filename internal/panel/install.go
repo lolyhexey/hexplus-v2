@@ -117,13 +117,21 @@ func Install(opts InstallOptions) (InstallResult, error) {
 	// can bring the units up manually if needed.
 	started := true
 	if service.SystemdAvailable() {
-		if err := service.Enable(xraySvc); err != nil { started = false }
-		if err := service.Enable(panelSvc); err != nil { started = false }
+		if err := service.Enable(xraySvc); err != nil {
+			started = false
+		}
+		if err := service.Enable(panelSvc); err != nil {
+			started = false
+		}
 		// xray comes up first so the panel finds config.json already
 		// generated (empty inbounds set, but valid) when it starts
 		// polling stats on boot.
-		if err := service.Start(xraySvc); err != nil { started = false }
-		if err := service.Start(panelSvc); err != nil { started = false }
+		if err := service.Start(xraySvc); err != nil {
+			started = false
+		}
+		if err := service.Start(panelSvc); err != nil {
+			started = false
+		}
 	} else {
 		started = false
 	}

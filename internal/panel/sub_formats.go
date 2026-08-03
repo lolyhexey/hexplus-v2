@@ -36,14 +36,14 @@ func buildClashProxy(
 	switch inbound.Protocol {
 	case "vless":
 		p := clashProxy{
-			"name":     name,
-			"type":     "vless",
-			"server":   address,
-			"port":     inbound.Port,
-			"uuid":     client.UUID,
-			"udp":      true,
-			"network":  strOr(s["network"], "tcp"),
-			"tls":      s["security"] == "tls" || s["security"] == "reality",
+			"name":               name,
+			"type":               "vless",
+			"server":             address,
+			"port":               inbound.Port,
+			"uuid":               client.UUID,
+			"udp":                true,
+			"network":            strOr(s["network"], "tcp"),
+			"tls":                s["security"] == "tls" || s["security"] == "reality",
 			"client-fingerprint": strOr(s["fingerprint"], "chrome"),
 		}
 		if sni, ok := s["sni"].(string); ok && sni != "" {
@@ -318,13 +318,13 @@ func buildSingBoxOutbound(
 
 	case "vmess":
 		o := map[string]any{
-			"type":         "vmess",
-			"tag":          tag,
-			"server":       address,
-			"server_port":  inbound.Port,
-			"uuid":         client.UUID,
-			"security":     "auto",
-			"alter_id":     0,
+			"type":        "vmess",
+			"tag":         tag,
+			"server":      address,
+			"server_port": inbound.Port,
+			"uuid":        client.UUID,
+			"security":    "auto",
+			"alter_id":    0,
 		}
 		if s["security"] == "tls" {
 			o["tls"] = map[string]any{
@@ -398,7 +398,7 @@ func renderSingBoxJSON(outbounds []map[string]any) string {
 	}
 	all := append([]map[string]any{selector}, outbounds...)
 	all = append(all, map[string]any{"type": "direct", "tag": "direct"})
-	all = append(all, map[string]any{"type": "block",  "tag": "block"})
+	all = append(all, map[string]any{"type": "block", "tag": "block"})
 
 	root := map[string]any{
 		"log":       map[string]any{"level": "info"},

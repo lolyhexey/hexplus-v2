@@ -79,8 +79,8 @@ func (s *Server) handleClientList(w http.ResponseWriter, r *http.Request) {
 	out := []ClientView{}
 	for rows.Next() {
 		var (
-			v      ClientView
-			enInt  int
+			v     ClientView
+			enInt int
 		)
 		if err := rows.Scan(&v.ID, &v.InboundID, &v.Email, &v.Protocol,
 			&v.UUID, &v.Password, &v.Key,
@@ -252,10 +252,10 @@ func (s *Server) handleClientQR(w http.ResponseWriter, r *http.Request) {
 // client + inbound rows and hands off to xray.ShareForClient.
 func (s *Server) buildShareLink(cid int64, addressOverride string) (string, error) {
 	var (
-		client   xray.Client
-		expUnix  int64
-		enInt    int
-		crtUnix  int64
+		client  xray.Client
+		expUnix int64
+		enInt   int
+		crtUnix int64
 	)
 	row := s.db.QueryRow(`
 		SELECT id, inbound_id, email, protocol, uuid, password, shared_key,

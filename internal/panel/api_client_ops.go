@@ -133,7 +133,7 @@ func extendClientExpiry(s *Server, cid int64, days int) error {
 
 // BulkOp is the POST /api/clients/bulk body shape.
 type BulkOp struct {
-	Op      string  `json:"op"`      // "toggle" | "reset" | "extend" | "delete"
+	Op      string  `json:"op"` // "toggle" | "reset" | "extend" | "delete"
 	IDs     []int64 `json:"ids"`
 	Days    int     `json:"days"`    // for op=extend
 	Enabled *bool   `json:"enabled"` // for op=toggle when caller wants absolute set instead of flip

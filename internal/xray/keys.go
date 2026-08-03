@@ -60,6 +60,7 @@ func NewShortID(n int) (string, error) {
 // method. AEAD ciphers demand exact key lengths:
 //   - aes-128-gcm / 2022-blake3-aes-128-gcm: 16 bytes
 //   - aes-256-gcm / chacha20-ietf-poly1305 / 2022-blake3-aes-256-gcm: 32 bytes
+//
 // Output is standard base64 so it drops directly into xray's config.
 func NewSSKey(method string) (string, error) {
 	size := 32

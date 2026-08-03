@@ -17,12 +17,12 @@ import (
 type NetworkKind string
 
 const (
-	NetTCP          NetworkKind = "tcp"
-	NetWS           NetworkKind = "ws"
-	NetGRPC         NetworkKind = "grpc"
-	NetHTTPUpgrade  NetworkKind = "httpupgrade"
-	NetXHTTP        NetworkKind = "xhttp"
-	NetKCP          NetworkKind = "kcp"
+	NetTCP         NetworkKind = "tcp"
+	NetWS          NetworkKind = "ws"
+	NetGRPC        NetworkKind = "grpc"
+	NetHTTPUpgrade NetworkKind = "httpupgrade"
+	NetXHTTP       NetworkKind = "xhttp"
+	NetKCP         NetworkKind = "kcp"
 )
 
 // SecurityKind is the TLS/Reality/None envelope.
@@ -48,17 +48,17 @@ type TransportParams struct {
 	ServiceName string
 
 	// TLS-only
-	SNI           string
-	ALPN          []string
-	Fingerprint   string   // "chrome" | "firefox" | "safari" | "ios" | "android" | "randomized" | ""
-	Certificates  []TLSCertificate
+	SNI          string
+	ALPN         []string
+	Fingerprint  string // "chrome" | "firefox" | "safari" | "ios" | "android" | "randomized" | ""
+	Certificates []TLSCertificate
 
 	// Reality-only
 	RealityDest        string   // e.g. "www.microsoft.com:443"
 	RealityServerNames []string // fronting hostnames
 	RealityPrivateKey  string   // base64 RawURL
 	RealityShortIDs    []string
-	RealitySpiderX     string   // default "/"
+	RealitySpiderX     string // default "/"
 }
 
 // TLSCertificate mirrors xray's tlsSettings.certificates[] shape.
@@ -103,12 +103,12 @@ type TCPSettings struct {
 // TLSSettings mirrors xray's tlsSettings inbound block. Kept minimal
 // on purpose; add fields as new use cases arrive.
 type TLSSettings struct {
-	ServerName    string           `json:"serverName,omitempty"`
-	ALPN          []string         `json:"alpn,omitempty"`
-	Fingerprint   string           `json:"fingerprint,omitempty"`
-	Certificates  []TLSCertificate `json:"certificates,omitempty"`
-	MinVersion    string           `json:"minVersion,omitempty"`
-	MaxVersion    string           `json:"maxVersion,omitempty"`
+	ServerName   string           `json:"serverName,omitempty"`
+	ALPN         []string         `json:"alpn,omitempty"`
+	Fingerprint  string           `json:"fingerprint,omitempty"`
+	Certificates []TLSCertificate `json:"certificates,omitempty"`
+	MinVersion   string           `json:"minVersion,omitempty"`
+	MaxVersion   string           `json:"maxVersion,omitempty"`
 }
 
 // RealitySettings mirrors xray's realitySettings inbound block.

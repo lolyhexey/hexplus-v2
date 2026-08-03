@@ -86,13 +86,13 @@ func (s *Server) handleSubscription(w http.ResponseWriter, r *http.Request) {
 // live, enabled, unexpired row so callers can 404 uniformly.
 func (s *Server) subscriptionLookup(token string) (xray.Client, xray.InboundFromDB, []byte, error) {
 	var (
-		client       xray.Client
-		inbound      xray.InboundFromDB
-		streamStr    string
-		settingsStr  string
-		expUnix      int64
-		enInt        int
-		crtUnix      int64
+		client      xray.Client
+		inbound     xray.InboundFromDB
+		streamStr   string
+		settingsStr string
+		expUnix     int64
+		enInt       int
+		crtUnix     int64
 	)
 	row := s.db.QueryRow(`
 		SELECT c.id, c.inbound_id, c.email, c.protocol, c.uuid, c.password, c.shared_key,

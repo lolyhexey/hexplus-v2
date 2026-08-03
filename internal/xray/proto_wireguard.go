@@ -15,10 +15,10 @@ type WGPeer struct {
 }
 
 type WGInboundSettings struct {
-	SecretKey string   `json:"secretKey"` // server-side x25519 private, base64
-	Peers     []WGPeer `json:"peers"`
-	MTU       int      `json:"mtu,omitempty"`
-	KernelMode bool    `json:"kernelMode,omitempty"`
+	SecretKey  string   `json:"secretKey"` // server-side x25519 private, base64
+	Peers      []WGPeer `json:"peers"`
+	MTU        int      `json:"mtu,omitempty"`
+	KernelMode bool     `json:"kernelMode,omitempty"`
 }
 
 func buildWireGuardSettings(secretKey string, clients []Client) WGInboundSettings {

@@ -139,10 +139,12 @@ func (h *Handler) Serve(ctx context.Context) error {
 // handleConn owns one client connection from accept to close.
 // Logs are emitted at the four hinge points a proxy operator wants to
 // see in journalctl:
-//   ACCEPT — a client TCP handshake landed
-//   403    — the client asked for a non-allowed X-Real-Host
-//   502    — the upstream dial failed
-//   CLOSE  — the bridge finished, with byte totals + duration
+//
+//	ACCEPT — a client TCP handshake landed
+//	403    — the client asked for a non-allowed X-Real-Host
+//	502    — the upstream dial failed
+//	CLOSE  — the bridge finished, with byte totals + duration
+//
 // The name = h.cfg.Name prefix on every line makes it grep-friendly
 // even when multiple proxies share the same journal.
 func (h *Handler) handleConn(client net.Conn) {

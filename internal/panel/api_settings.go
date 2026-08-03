@@ -100,7 +100,7 @@ func (s *Server) handleSettingsPut(w http.ResponseWriter, r *http.Request) {
 	// take effect on the current process without a restart.
 	s.cfg.SubscriptionEnabled = cfg.SubscriptionEnabled
 	writeJSON(w, http.StatusOK, map[string]any{
-		"ok":              true,
+		"ok":               true,
 		"requires_restart": in.Port != nil || in.ListenAddr != nil,
 	})
 }
@@ -187,8 +187,8 @@ func (s *Server) handleRotatePrefix(w http.ResponseWriter, _ *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"ok":              true,
-		"url_prefix":      cfg.URLPrefix,
+		"ok":               true,
+		"url_prefix":       cfg.URLPrefix,
 		"requires_restart": true,
 	})
 }

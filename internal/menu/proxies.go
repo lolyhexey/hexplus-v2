@@ -343,8 +343,9 @@ func proxyToggleVerbose(r *bufio.Reader, s *proxySlot) {
 // operator sees interleaved logs from every port in a single view.
 //
 // Two viewing modes:
-//   snapshot: -n 200 --no-pager, returns immediately
-//   realtime: -f (follow), streams live until the operator hits Ctrl+C
+//
+//	snapshot: -n 200 --no-pager, returns immediately
+//	realtime: -f (follow), streams live until the operator hits Ctrl+C
 func proxyShowLogs(r *bufio.Reader, db *proxy.DB, s *proxySlot) {
 	clearScreen()
 	paintTitleBar("            log " + s.label + "            ")

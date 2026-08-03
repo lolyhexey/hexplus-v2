@@ -29,12 +29,12 @@ type realityScanInput struct {
 }
 
 type realityScanResult struct {
-	Host    string `json:"host"`
-	OK      bool   `json:"ok"`
-	Reason  string `json:"reason,omitempty"`
-	TLSVer  string `json:"tls_version,omitempty"`
-	ALPN    string `json:"alpn,omitempty"`
-	RTTms   int64  `json:"rtt_ms,omitempty"`
+	Host   string `json:"host"`
+	OK     bool   `json:"ok"`
+	Reason string `json:"reason,omitempty"`
+	TLSVer string `json:"tls_version,omitempty"`
+	ALPN   string `json:"alpn,omitempty"`
+	RTTms  int64  `json:"rtt_ms,omitempty"`
 }
 
 func (s *Server) handleRealityScan(w http.ResponseWriter, r *http.Request) {

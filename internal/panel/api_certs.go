@@ -64,10 +64,10 @@ func (s *Server) handleCertList(w http.ResponseWriter, r *http.Request) {
 // JSON body a single line even for multiline PEMs — cheaper than
 // escaping newlines client-side.
 type ManualCertInput struct {
-	Domain   string `json:"domain"`
-	CertPEM  string `json:"cert_pem"` // base64
-	KeyPEM   string `json:"key_pem"`  // base64
-	Remark   string `json:"remark"`
+	Domain  string `json:"domain"`
+	CertPEM string `json:"cert_pem"` // base64
+	KeyPEM  string `json:"key_pem"`  // base64
+	Remark  string `json:"remark"`
 }
 
 func (s *Server) handleCertManual(w http.ResponseWriter, r *http.Request) {

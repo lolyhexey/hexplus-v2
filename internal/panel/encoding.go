@@ -9,4 +9,4 @@ import (
 // stays readable and doesn't import crypto/rand directly for one call.
 
 func randRead(buf []byte) (int, error) { return rand.Read(buf) }
-func hexEncode(b []byte) string          { return hex.EncodeToString(b) }
+func hexEncode(b []byte) string        { return hex.EncodeToString(b) }

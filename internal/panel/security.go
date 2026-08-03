@@ -17,8 +17,8 @@ import (
 
 // LoginRateLimit describes the failure budget before an IP is banned.
 type LoginRateLimit struct {
-	Failures   int
-	Window     time.Duration
+	Failures    int
+	Window      time.Duration
 	BanDuration time.Duration
 }
 
@@ -123,8 +123,8 @@ const CSRFCookieName = "hexplus_csrf"
 const CSRFHeaderName = "X-CSRF-Token"
 
 // wrapCSRF is the middleware installed on the whole admin sub-mux. It:
-//   1. Ensures a CSRF cookie exists (issues on first hit).
-//   2. On mutating verbs, checks the cookie value equals the header.
+//  1. Ensures a CSRF cookie exists (issues on first hit).
+//  2. On mutating verbs, checks the cookie value equals the header.
 func wrapCSRF(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		token := ""

@@ -229,8 +229,8 @@ func (s *Server) handleInboundDelete(w http.ResponseWriter, r *http.Request) {
 // (*sql.Rows) and single-row (*sql.Row) query paths.
 func scanInbound(r rowScanner) (InboundView, error) {
 	var (
-		v              InboundView
-		settings, str  string
+		v               InboundView
+		settings, str   string
 		sniffInt, enInt int
 	)
 	if err := r.Scan(&v.ID, &v.Tag, &v.Protocol, &v.Listen, &v.Port,

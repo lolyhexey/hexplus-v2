@@ -388,11 +388,11 @@ func runSelfUpdate(_ *bufio.Reader) error {
 
 	// State shared across steps via closure captures.
 	var (
-		rel        ghRelease
-		asset      *ghAsset
-		selfPath   string
-		tmpPath    string
-		upToDate   bool
+		rel      ghRelease
+		asset    *ghAsset
+		selfPath string
+		tmpPath  string
+		upToDate bool
 	)
 
 	fmt.Println()

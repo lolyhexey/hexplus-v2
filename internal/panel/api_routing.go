@@ -63,9 +63,9 @@ func (s *Server) handleOutboundList(w http.ResponseWriter, r *http.Request) {
 	out := []OutboundView{}
 	for rows.Next() {
 		var (
-			v      OutboundView
+			v        OutboundView
 			set, str string
-			enInt  int
+			enInt    int
 		)
 		if err := rows.Scan(&v.ID, &v.Tag, &v.Protocol, &set, &str, &v.Remark, &enInt, &v.CreatedAt, &v.UpdatedAt); err != nil {
 			writeJSON(w, http.StatusInternalServerError, errBody(err))
@@ -201,9 +201,9 @@ func (s *Server) handleRuleList(w http.ResponseWriter, r *http.Request) {
 	out := []RuleView{}
 	for rows.Next() {
 		var (
-			v         RuleView
+			v                    RuleView
 			domains, ips, protos string
-			enInt     int
+			enInt                int
 		)
 		if err := rows.Scan(&v.ID, &v.Priority, &v.OutboundTag, &v.InboundTag, &domains, &ips, &protos, &v.PortRange, &v.Remark, &enInt, &v.CreatedAt, &v.UpdatedAt); err != nil {
 			writeJSON(w, http.StatusInternalServerError, errBody(err))

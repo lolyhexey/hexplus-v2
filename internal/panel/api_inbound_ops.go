@@ -152,11 +152,11 @@ func (s *Server) handleInboundExport(w http.ResponseWriter, _ *http.Request) {
 	}
 	for rows.Next() {
 		var (
-			id                                 int64
-			tag, protocol, listen, remark      string
-			port                               int
-			settings, stream                   string
-			sniffInt, enabledInt               int
+			id                            int64
+			tag, protocol, listen, remark string
+			port                          int
+			settings, stream              string
+			sniffInt, enabledInt          int
 		)
 		if err := rows.Scan(&id, &tag, &protocol, &listen, &port,
 			&settings, &stream, &sniffInt, &enabledInt, &remark); err != nil {
@@ -272,7 +272,9 @@ func (s *Server) handleInboundImport(w http.ResponseWriter, r *http.Request) {
 }
 
 func itoa64(n int64) string {
-	if n == 0 { return "0" }
+	if n == 0 {
+		return "0"
+	}
 	var buf [20]byte
 	i := len(buf)
 	for n > 0 {
