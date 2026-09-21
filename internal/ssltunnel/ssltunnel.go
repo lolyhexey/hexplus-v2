@@ -20,6 +20,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"time"
 )
 
@@ -75,6 +76,23 @@ func (cfg Config) Save() error {
 	if err := os.Rename(tmp, DBPath); err != nil {
 		_ = os.Remove(tmp)
 		return err
+	}
+	return nil
+}
+
+// ValidateTarget checks that target is a "host:port" address the tunnel can
+// dial over TCP, e.g. "127.0.0.1:22" or "127.0.0.1:1194".
+func ValidateTarget(target string) error {
+	host, portStr, err := net.SplitHostPort(target)
+	if err != nil {
+		return errors.New("ปลายทางต้องอยู่ในรูปแบบ host:port เช่น 127.0.0.1:1194")
+	}
+	if host == "" {
+		return errors.New("ไม่ได้ระบุ host ของปลายทาง")
+	}
+	port, err := strconv.Atoi(portStr)
+	if err != nil || port < 1 || port > 65535 {
+		return fmt.Errorf("พอร์ตปลายทางไม่ถูกต้อง: %q — ต้องเป็นตัวเลข 1-65535", portStr)
 	}
 	return nil
 }

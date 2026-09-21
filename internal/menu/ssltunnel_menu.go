@@ -32,6 +32,7 @@ func sslTunnelMenu(r *bufio.Reader) error {
 			paintOptions([][2]string{
 				{"1", "ติดตั้ง SSL TUNNEL แบบมาตรฐาน  (target: 127.0.0.1:22)"},
 				{"2", "ติดตั้ง SSL TUNNEL WEBSOCKET   (target: 127.0.0.1:80)"},
+				{"3", "ติดตั้ง SSL TUNNEL กำหนดปลายทางเอง (เช่น 127.0.0.1:1194)"},
 				{"0", "ย้อนกลับ"},
 			})
 			fmt.Println()
@@ -52,6 +53,21 @@ func sslTunnelMenu(r *bufio.Reader) error {
 					fmt.Println(cRedBold + "[ผิดพลาด] " + cYelBold + err.Error() + cReset)
 					waitEnter(r)
 				}
+			case "3", "03":
+				clearScreen()
+				paintTitleBar("              ติดตั้ง SSL TUNNEL               ")
+				fmt.Println()
+				target, ok, err := promptSSLTarget(r, "127.0.0.1:1194")
+				if err != nil {
+					return err
+				}
+				if !ok {
+					continue
+				}
+				if err := sslTunnelInstall(r, target); err != nil {
+					fmt.Println(cRedBold + "[ผิดพลาด] " + cYelBold + err.Error() + cReset)
+					waitEnter(r)
+				}
 			default:
 				fmt.Println("\n" + cRedBold + "[ผิดพลาด]" + cYelBold + " ตัวเลือกไม่ถูกต้อง" + cReset)
 				waitEnter(r)
@@ -66,6 +82,7 @@ func sslTunnelMenu(r *bufio.Reader) error {
 				{"2", "ลบ SSL TUNNEL"},
 				{"3", "รีสตาร์ท SSL TUNNEL"},
 				{"4", "ดู log SSL TUNNEL"},
+				{"5", "เปลี่ยนปลายทาง (target) SSL TUNNEL"},
 				{"0", "ย้อนกลับ"},
 			})
 			fmt.Println()
@@ -95,6 +112,11 @@ func sslTunnelMenu(r *bufio.Reader) error {
 				waitEnter(r)
 			case "4", "04":
 				showUnitLog(r, ssltunnel.UnitName)
+			case "5", "05":
+				if err := sslTunnelChangeTarget(r, cfg); err != nil {
+					fmt.Println(cRedBold + "[ผิดพลาด] " + cYelBold + err.Error() + cReset)
+					waitEnter(r)
+				}
 			default:
 				fmt.Println("\n" + cRedBold + "[ผิดพลาด]" + cYelBold + " ตัวเลือกไม่ถูกต้อง" + cReset)
 				waitEnter(r)
@@ -104,7 +126,8 @@ func sslTunnelMenu(r *bufio.Reader) error {
 }
 
 // sslTunnelInstall runs the full install flow for the given target address.
-// target is "127.0.0.1:22" (standard SSH) or "127.0.0.1:80" (WebSocket).
+// target is "127.0.0.1:22" (standard SSH), "127.0.0.1:80" (WebSocket), or
+// an operator-supplied host:port such as OpenVPN's "127.0.0.1:1194".
 func sslTunnelInstall(r *bufio.Reader, target string) error {
 	clearScreen()
 	paintTitleBar("              ติดตั้ง SSL TUNNEL               ")
@@ -233,6 +256,54 @@ func sslTunnelChangePort(r *bufio.Reader, cfg ssltunnel.Config) error {
 		fmt.Println("\n" + cYelBold + "คำเตือน: รีสตาร์ทไม่สำเร็จ: " + err.Error() + cReset)
 	}
 	fmt.Println("\n" + cGrnBold + fmt.Sprintf("เปลี่ยนพอร์ตเป็น %d สำเร็จ", port) + cReset)
+	waitEnter(r)
+	return nil
+}
+
+// promptSSLTarget asks for a host:port target. ok is false when the input
+// was rejected (the error has already been shown).
+func promptSSLTarget(r *bufio.Reader, defaultVal string) (target string, ok bool, err error) {
+	line, err := promptLineDefault(r, "ปลายทาง (host:port)", defaultVal)
+	if err != nil {
+		return "", false, err
+	}
+	target = strings.TrimSpace(line)
+	if err := ssltunnel.ValidateTarget(target); err != nil {
+		fmt.Println("\n" + cRedBold + "[ผิดพลาด] " + cYelBold + err.Error() + cReset)
+		waitEnter(r)
+		return "", false, nil
+	}
+	return target, true, nil
+}
+
+// sslTunnelChangeTarget asks for a new target and restarts the tunnel. The
+// unit is rewritten too so its Description shows the current target.
+func sslTunnelChangeTarget(r *bufio.Reader, cfg ssltunnel.Config) error {
+	clearScreen()
+	paintTitleBar("              เปลี่ยนปลายทาง SSL TUNNEL               ")
+	fmt.Println()
+
+	target, ok, err := promptSSLTarget(r, cfg.Target)
+	if err != nil || !ok {
+		return err
+	}
+	if target == cfg.Target {
+		fmt.Println("\n" + cYelBold + "ปลายทางเดิม — ไม่มีการเปลี่ยนแปลง" + cReset)
+		waitEnter(r)
+		return nil
+	}
+
+	cfg.Target = target
+	if err := cfg.Save(); err != nil {
+		return err
+	}
+	if err := ssltunnel.WriteUnit(cfg); err != nil {
+		return err
+	}
+	if err := systemctlRun("restart", ssltunnel.UnitName); err != nil {
+		fmt.Println("\n" + cYelBold + "คำเตือน: รีสตาร์ทไม่สำเร็จ: " + err.Error() + cReset)
+	}
+	fmt.Println("\n" + cGrnBold + "เปลี่ยนปลายทางเป็น " + target + " สำเร็จ" + cReset)
 	waitEnter(r)
 	return nil
 }
