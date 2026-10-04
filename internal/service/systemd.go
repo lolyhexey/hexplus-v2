@@ -18,6 +18,7 @@ import (
 	"text/template"
 
 	"github.com/lolyhexey/hexplus/internal/paths"
+	"github.com/lolyhexey/hexplus/internal/unitpolicy"
 )
 
 // SystemdUnitDir is where systemd reads admin-installed units from. We
@@ -38,7 +39,7 @@ Description={{.DisplayName}}
 Documentation=https://github.com/lolyhexey/hexplus-v2
 After={{join .After " "}}
 Wants={{join .After " "}}
-
+` + unitpolicy.StartLimit + `
 [Service]
 Type=simple
 ExecStart={{.Binary}}{{range .Args}} {{.}}{{end}}

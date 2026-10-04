@@ -228,7 +228,7 @@ func proxyRestartSlot(r *bufio.Reader, db *proxy.DB, s *proxySlot) {
 		cfg := cfg
 		steps = append(steps, progress.Step{
 			Label: "รีสตาร์ท " + cfg.Name + " (:" + strconv.Itoa(cfg.Port) + ")",
-			Work:  func() error { return exec.Command("systemctl", "restart", cfg.UnitName()).Run() },
+			Work:  func() error { return service.RestartUnit(cfg.UnitName()) },
 		})
 	}
 
@@ -321,7 +321,7 @@ func proxyToggleVerbose(r *bufio.Reader, s *proxySlot) {
 		e := e
 		steps = append(steps, progress.Step{
 			Label: "Restart hexplus-proxy-" + e.Name,
-			Work:  func() error { return exec.Command("systemctl", "restart", e.UnitName()).Run() },
+			Work:  func() error { return service.RestartUnit(e.UnitName()) },
 		})
 	}
 	if err := progress.Run(steps); err != nil {

@@ -100,6 +100,9 @@ func (s *Server) handleXrayConfig(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (s *Server) handleXrayRestart(w http.ResponseWriter, _ *http.Request) {
+	// A crash loop that tripped StartLimitBurst makes systemd refuse every
+	// start until reset-failed; an operator's explicit restart must not be.
+	_ = exec.Command("systemctl", "reset-failed", "hexplus-xray.service").Run()
 	if err := exec.Command("systemctl", "restart", "hexplus-xray.service").Run(); err != nil {
 		writeJSON(w, http.StatusInternalServerError, errBody(err))
 		return
