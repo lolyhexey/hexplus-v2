@@ -10,6 +10,7 @@ package menu
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -1481,6 +1482,17 @@ func openvpnInstall(r *bufio.Reader, svc service.Service) error {
 	paintTitleBar("              ติดตั้ง OPENVPN               ")
 	fmt.Println()
 
+	// Check before asking anything or writing a file: without these the
+	// install used to "succeed" with no forwarding and no working login.
+	if missing := missingTools(openvpnInstallTools); len(missing) > 0 {
+		fmt.Println(cRedBold + "[ผิดพลาด] " + cYelBold + "เครื่องนี้ไม่มีคำสั่งที่ OPENVPN ต้องใช้: " + cWhtBold + strings.Join(missing, ", ") + cReset)
+		fmt.Println(cYelBold + "ติดตั้งก่อนแล้วลองใหม่:" + cReset)
+		fmt.Println(cWhtBold + "  Debian/Ubuntu: apt-get install -y iproute2 iptables openssl" + cReset)
+		fmt.Println(cWhtBold + "  RHEL/Alma/Rocky: dnf install -y iproute iptables openssl" + cReset)
+		waitEnter(r)
+		return nil
+	}
+
 	// ---- ถาม IP ----
 	serverIP := defaultServerIP()
 	ipLine, _ := promptLineDefault(r, "ยืนยัน IP ของคุณเพื่อดำเนินการต่อ", serverIP)
@@ -1547,6 +1559,7 @@ func openvpnInstall(r *bufio.Reader, svc service.Service) error {
 	}
 
 	var listening bool
+	var netErr error
 	steps := []progress.Step{
 		{Label: "แตกไฟล์ binary + unit", Work: func() error {
 			_, err := service.InstallService(svc)
@@ -1557,7 +1570,7 @@ func openvpnInstall(r *bufio.Reader, svc service.Service) error {
 			return pki.WriteServerConf(port, proto, dnsChoice, ipLine)
 		}},
 		{Label: "ตั้งค่าเครือข่าย (IP forward + SNAT)", Work: func() error {
-			setupNetworking(port, proto)
+			netErr = setupNetworking(port, proto)
 			return nil
 		}},
 		{Label: "เริ่ม OPENVPN", Work: func() error {
@@ -1582,10 +1595,16 @@ func openvpnInstall(r *bufio.Reader, svc service.Service) error {
 	}
 
 	fmt.Println()
-	if listening {
+	if listening && netErr != nil {
+		fmt.Println(cYelBold + "OPENVPN เปิดพอร์ต " + strconv.Itoa(port) + " แล้ว แต่ลูกค้าอาจออกอินเทอร์เน็ตไม่ได้:" + cReset)
+		fmt.Println(cYelBold + "[คำเตือน] " + cWhtBold + netErr.Error() + cReset)
+	} else if listening {
 		fmt.Println(cGrnBold + "ติดตั้ง OPENVPN สำเร็จแล้ว !" + cYelBold + " พอร์ต: " + cWhtBold + strconv.Itoa(port) + cReset)
 	} else {
 		fmt.Println(cRedBold + "[ผิดพลาด]" + cYelBold + " OPENVPN เริ่มทำงานไม่สำเร็จ — ตรวจสอบ journalctl -u " + svc.UnitName + cReset)
+		if netErr != nil {
+			fmt.Println(cYelBold + "[คำเตือน] " + cWhtBold + netErr.Error() + cReset)
+		}
 	}
 	waitEnter(r)
 	return nil
@@ -1597,10 +1616,15 @@ func openvpnInstall(r *bufio.Reader, svc service.Service) error {
 // a private interface IP and a separate public IP — SNAT --to <publicIP>
 // rejects packets because no interface owns that address. MASQUERADE picks
 // the egress interface's source IP automatically.
-// Failures are non-fatal — logged to stderr, installer continues.
-func setupNetworking(port int, proto string) {
+// Failures are non-fatal: the installer continues, but every problem that
+// leaves clients without internet is returned so the final screen can say
+// so instead of reporting a plain success.
+func setupNetworking(port int, proto string) error {
 	// 1. Enable IP forwarding immediately.
-	_ = os.WriteFile("/proc/sys/net/ipv4/ip_forward", []byte("1\n"), 0o644)
+	var problems []string
+	if err := os.WriteFile("/proc/sys/net/ipv4/ip_forward", []byte("1\n"), 0o644); err != nil {
+		problems = append(problems, "เปิด IP forwarding ไม่ได้: "+err.Error())
+	}
 
 	// 2. Persist in /etc/sysctl.conf.
 	if raw, err := os.ReadFile("/etc/sysctl.conf"); err == nil {
@@ -1627,8 +1651,10 @@ func setupNetworking(port int, proto string) {
 
 	// 3. iptables MASQUERADE — let VPN clients reach the internet via the
 	// box's actual egress interface, whatever its address happens to be.
-	exec.Command("iptables", "-t", "nat", "-A", "POSTROUTING",
-		"-s", "10.8.0.0/16", "-j", "MASQUERADE").Run()
+	if out, err := exec.Command("iptables", "-t", "nat", "-A", "POSTROUTING",
+		"-s", "10.8.0.0/16", "-j", "MASQUERADE").CombinedOutput(); err != nil {
+		problems = append(problems, "MASQUERADE: "+err.Error()+" "+strings.TrimSpace(string(out)))
+	}
 
 	// 4. Open the VPN port if a DROP/REJECT policy exists. FORWARD is
 	// opened separately in step 6b, after the SMTP/POP3 DROP rules.
@@ -1662,9 +1688,9 @@ func setupNetworking(port int, proto string) {
 	// persisted below because Docker rebuilds FORWARD at every boot.
 	var forwardLines []string
 	if egress, err := firewall.DetectEgress(); err != nil {
-		fmt.Println(cYelBold + "[คำเตือน]" + cWhtBold + " หา interface ขาออกไม่ได้ จึงไม่ได้เปิด FORWARD ให้ลูกค้า VPN: " + err.Error() + cReset)
+		problems = append(problems, "หา interface ขาออกไม่ได้ จึงไม่ได้เปิด FORWARD ให้ลูกค้า VPN: "+err.Error())
 	} else if err := firewall.ApplyForward(egress); err != nil {
-		fmt.Println(cYelBold + "[คำเตือน]" + cWhtBold + " เปิด FORWARD ไม่สำเร็จ: " + err.Error() + cReset)
+		problems = append(problems, "เปิด FORWARD ไม่สำเร็จ: "+err.Error())
 	} else {
 		forwardLines = firewall.RCLocalLines(egress)
 	}
@@ -1710,9 +1736,16 @@ func setupNetworking(port int, proto string) {
 			content = strings.Join(newLines, "\n") + "\n"
 		}
 		if content != string(raw) {
-			_ = os.WriteFile(rclocal, []byte(content), 0o755)
+			if err := os.WriteFile(rclocal, []byte(content), 0o755); err != nil {
+				problems = append(problems, "บันทึกกฎลง "+rclocal+" ไม่ได้ (กฎจะหายหลังรีบูต): "+err.Error())
+			}
 		}
 	}
+
+	if len(problems) > 0 {
+		return errors.New(strings.Join(problems, "; "))
+	}
+	return nil
 }
 
 // openvpnAskPKI shows the PKI source menu (requires user input) and returns
