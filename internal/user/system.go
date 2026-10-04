@@ -96,13 +96,25 @@ func CreateSystemUser(name string, expires time.Time) error {
 	return nil
 }
 
-// SetPassword feeds 'name:password\n' to `chpasswd`, which hashes via
-// the system's configured crypt method (SHA-512 on every distro since
-// ~2010) and writes /etc/shadow. We avoid `passwd <name>` because it
+// chpasswdArgs pins the hash to SHA-512. Bare `chpasswd` goes through PAM
+// on Debian/Ubuntu, where pam_unix picks the algorithm; Ubuntu 22.04 and
+// Debian 11+ pick yescrypt ($y$). The OpenVPN verifier
+// (pki/serverconf.go, hexplus-auth.sh) only understands $6$/$5$/$1$ and
+// rejects anything else, so a yescrypt hash locks the user out. With -c,
+// chpasswd hashes itself and bypasses PAM.
+var chpasswdArgs = []string{"-c", "SHA512"}
+
+func chpasswdCmd(name, password string) *exec.Cmd {
+	cmd := exec.Command("chpasswd", chpasswdArgs...)
+	cmd.Stdin = strings.NewReader(name + ":" + password + "\n")
+	return cmd
+}
+
+// SetPassword feeds 'name:password\n' to `chpasswd -c SHA512`, which
+// writes a $6$ hash to /etc/shadow. We avoid `passwd <name>` because it
 // wants a tty.
 func SetPassword(name, password string) error {
-	cmd := exec.Command("chpasswd")
-	cmd.Stdin = strings.NewReader(name + ":" + password + "\n")
+	cmd := chpasswdCmd(name, password)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		if errors.Is(err, exec.ErrNotFound) {

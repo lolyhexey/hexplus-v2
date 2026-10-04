@@ -29,6 +29,7 @@ import (
 	"github.com/lolyhexey/hexplus/internal/install"
 	"github.com/lolyhexey/hexplus/internal/progress"
 	"github.com/lolyhexey/hexplus/internal/service"
+	"github.com/lolyhexey/hexplus/internal/user"
 	"github.com/lolyhexey/hexplus/internal/version"
 )
 
@@ -325,11 +326,10 @@ func runRootPassword(r *bufio.Reader) error {
 		return errors.New("รหัสผ่านว่างเปล่า")
 	}
 
-	cmd := exec.Command("chpasswd")
-	cmd.Stdin = strings.NewReader("root:" + pw + "\n")
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("chpasswd: %w: %s", err, strings.TrimSpace(string(out)))
+	// user.SetPassword pins SHA-512: bare chpasswd writes yescrypt on
+	// Ubuntu 22.04+, which the bundled dropbear (musl crypt) cannot verify.
+	if err := user.SetPassword("root", pw); err != nil {
+		return err
 	}
 	fmt.Println(cGrnBold + "ตั้งรหัสผ่านรูทสำเร็จ" + cReset)
 	return nil
@@ -601,10 +601,8 @@ func runEnableRoot(r *bufio.Reader) error {
 	if pw == "" {
 		return errors.New("รหัสผ่านว่างเปล่า")
 	}
-	cmd := exec.Command("chpasswd")
-	cmd.Stdin = strings.NewReader("root:" + pw + "\n")
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("chpasswd: %w: %s", err, strings.TrimSpace(string(out)))
+	if err := user.SetPassword("root", pw); err != nil {
+		return err
 	}
 	fmt.Println(cGrnBold + "ตั้งรหัสผ่าน root สำเร็จ" + cReset)
 	return nil
