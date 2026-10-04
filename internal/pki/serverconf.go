@@ -4,29 +4,49 @@ import (
 	"fmt"
 	"os"
 	"strings"
+
+	"github.com/lolyhexey/hexplus/internal/atomicfile"
 )
 
 // AuthScriptPath is where we write the fallback password-auth script.
 const AuthScriptPath = OpenVPNDir + "/hexplus-auth.sh"
 
 // authScript validates username/password against /etc/shadow using
-// openssl passwd — no external packages required beyond openssl + getent.
+// openssl passwd, and rejects expired accounts. It needs bash, getent,
+// openssl, date, sed, cut and awk; any of them missing makes it reject.
 const authScript = `#!/bin/bash
 CREDFILE="$1"
 USERNAME=$(sed -n '1p' "$CREDFILE")
 PASSWORD=$(sed -n '2p' "$CREDFILE")
 
-HASH=$(getent shadow "$USERNAME" 2>/dev/null | cut -d: -f2)
+ENTRY=$(getent shadow "$USERNAME" 2>/dev/null)
+HASH=$(printf '%s\n' "$ENTRY" | cut -d: -f2)
 [ -z "$HASH" ] && exit 1
 case "$HASH" in "!"|"*"|"!!"*) exit 1 ;; esac
+
+# Account expiry: shadow field 8, in days since 1970-01-01, set by
+# 'useradd -e' and 'chage -E'. Same rule as pam_unix: expired once today
+# reaches that day. Empty or -1 means never; anything else malformed fails,
+# and so does a clock we cannot read. More than 9 digits is millions of
+# years away and counts as never.
+EXPIRE=$(printf '%s\n' "$ENTRY" | cut -d: -f8)
+case "$EXPIRE" in
+    ''|-1) ;;
+    *[!0-9]*) exit 1 ;;
+    *)
+        NOW=$(date +%s 2>/dev/null)
+        case "$NOW" in ''|*[!0-9]*) exit 1 ;; esac
+        [ ${#EXPIRE} -le 9 ] && [ $((NOW / 86400)) -ge "$EXPIRE" ] && exit 1
+        ;;
+esac
 
 ALG=$(echo "$HASH"  | awk -F'$' '{print $2}')
 SALT=$(echo "$HASH" | awk -F'$' '{print $3}')
 
+# The password goes to openssl on stdin (printf is a shell builtin): on the
+# command line it was readable by every local user in /proc/<pid>/cmdline.
 case "$ALG" in
-    6) COMPUTED=$(openssl passwd -6 -salt "$SALT" "$PASSWORD" 2>/dev/null) ;;
-    5) COMPUTED=$(openssl passwd -5 -salt "$SALT" "$PASSWORD" 2>/dev/null) ;;
-    1) COMPUTED=$(openssl passwd -1 -salt "$SALT" "$PASSWORD" 2>/dev/null) ;;
+    6|5|1) COMPUTED=$(printf '%s\n' "$PASSWORD" | openssl passwd -"$ALG" -salt "$SALT" -stdin 2>/dev/null) ;;
     *) exit 1 ;;
 esac
 
@@ -114,8 +134,24 @@ func authDirectives() string {
 // writeAuthLines writes hexplus-auth.sh and returns the server.conf lines
 // that reference it.
 func writeAuthLines() string {
-	_ = os.WriteFile(AuthScriptPath, []byte(authScript), 0o700)
+	_ = atomicfile.Write(AuthScriptPath, []byte(authScript), 0o700)
 	return authDirectives()
+}
+
+// EnsureAuthScript rewrites hexplus-auth.sh when it is installed but differs
+// from the embedded version, so fixes reach hosts installed by an older
+// release (the script is otherwise only written when a server config is
+// generated). OpenVPN runs the script afresh for every login, so no restart
+// is needed. A host without the script (OpenVPN not installed) is left
+// alone.
+func EnsureAuthScript() error { return ensureAuthScriptAt(AuthScriptPath) }
+
+func ensureAuthScriptAt(path string) error {
+	cur, err := os.ReadFile(path)
+	if err != nil || string(cur) == authScript {
+		return nil
+	}
+	return atomicfile.Write(path, []byte(authScript), 0o700)
 }
 
 // WriteServerConf overwrites /etc/openvpn/server.conf with the operator's

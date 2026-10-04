@@ -20,6 +20,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/lolyhexey/hexplus/internal/atomicfile"
 )
 
 const (
@@ -128,7 +130,7 @@ func writeConf(limits Limits) error {
 }
 
 func deployScript() error {
-	return os.WriteFile(ScriptPath, []byte(learnAddressScript), 0o755)
+	return atomicfile.Write(ScriptPath, []byte(learnAddressScript), 0o755)
 }
 
 // serverConfs returns every OpenVPN server config the shaper should hook:
@@ -193,5 +195,5 @@ func ensureScriptAt(path string) error {
 	if err != nil || string(cur) == learnAddressScript {
 		return nil
 	}
-	return os.WriteFile(path, []byte(learnAddressScript), 0o755)
+	return atomicfile.Write(path, []byte(learnAddressScript), 0o755)
 }
