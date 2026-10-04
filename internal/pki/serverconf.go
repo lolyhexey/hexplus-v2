@@ -3,7 +3,6 @@ package pki
 import (
 	"fmt"
 	"os"
-	"os/exec"
 	"strings"
 )
 
@@ -95,46 +94,28 @@ var dnsLines = map[string][]string{
 	"7": {`push "dhcp-option DNS 189.38.95.95"`, `push "dhcp-option DNS 216.146.36.36"`},
 }
 
-// FindPAMPlugin returns the absolute path to openvpn-plugin-auth-pam.so,
-// trying common distro locations and falling back to `find`. Returns ""
-// if not found.
-func FindPAMPlugin() string {
-	candidates := []string{
-		"/usr/lib/openvpn/openvpn-plugin-auth-pam.so",
-		"/usr/lib64/openvpn/openvpn-plugin-auth-pam.so",
-		"/usr/lib/x86_64-linux-gnu/openvpn/openvpn-plugin-auth-pam.so",
-		"/usr/lib/aarch64-linux-gnu/openvpn/openvpn-plugin-auth-pam.so",
-	}
-	for _, p := range candidates {
-		if _, err := os.Stat(p); err == nil {
-			return p
-		}
-	}
-	out, err := exec.Command("find", "/usr", "-type", "f",
-		"-name", "openvpn-plugin-auth-pam.so").Output()
-	if err == nil {
-		line := strings.SplitN(strings.TrimSpace(string(out)), "\n", 2)[0]
-		if line != "" {
-			return line
-		}
-	}
-	return ""
-}
-
-// writeAuthScript writes hexplus-auth.sh (or the PAM plugin line) and
-// returns the server.conf lines to reference it. Prefers PAM plugin;
-// falls back to the bundled openssl-passwd script.
+// authDirectives returns the server.conf lines that authenticate clients
+// with hexplus-auth.sh.
+//
+// There is deliberately no PAM-plugin branch: the embedded OpenVPN is built
+// with --disable-plugins (build/Dockerfile.openvpn), so a "plugin <so>
+// login" line makes it exit at startup with "Unrecognized option ...
+// plugin". An earlier version emitted that line whenever an
+// openvpn-plugin-auth-pam.so happened to exist on the host.
 //
 // Note: we deliberately omit "user nobody / group nogroup" — those
 // directives prevent the auth script from reading /etc/shadow. v1
 // conexao also omits them.
+func authDirectives() string {
+	return "script-security 2\nverify-client-cert none\nusername-as-common-name\n" +
+		"auth-user-pass-verify " + AuthScriptPath + " via-file"
+}
+
+// writeAuthLines writes hexplus-auth.sh and returns the server.conf lines
+// that reference it.
 func writeAuthLines() string {
-	base := "verify-client-cert none\nusername-as-common-name"
-	if pam := FindPAMPlugin(); pam != "" {
-		return base + "\nplugin " + pam + " login"
-	}
 	_ = os.WriteFile(AuthScriptPath, []byte(authScript), 0o700)
-	return "script-security 2\n" + base + "\nauth-user-pass-verify " + AuthScriptPath + " via-file"
+	return authDirectives()
 }
 
 // WriteServerConf overwrites /etc/openvpn/server.conf with the operator's
