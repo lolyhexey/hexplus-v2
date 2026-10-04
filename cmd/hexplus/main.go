@@ -377,11 +377,11 @@ func runLogs(args []string) {
 	fs.BoolVar(follow, "f", false, "alias for --follow")
 	tail := fs.Int("tail", 0, "show only the last N entries (0 = all)")
 	fs.IntVar(tail, "n", 0, "alias for --tail")
-	if err := fs.Parse(args); err != nil {
+	rest, err := parseFlagsAnywhere(fs, args)
+	if err != nil {
 		os.Exit(2)
 	}
-	rest := fs.Args()
-	if len(rest) == 0 {
+	if len(rest) != 1 {
 		fmt.Fprintln(os.Stderr, "usage: hexplus logs <service> [--follow] [--tail N]")
 		fmt.Fprintf(os.Stderr, "  services: %s\n", strings.Join(service.Names(), ", "))
 		os.Exit(2)
@@ -504,11 +504,11 @@ func runUserAdd(args []string) {
 	remotePort := fs.Int("remote-port", 1194, "OpenVPN server port for the .ovpn")
 	proto := fs.String("proto", "udp", "OpenVPN proto (udp|tcp)")
 	outFile := fs.String("out", "", "write the .ovpn to this path (default: /root/<name>.ovpn)")
-	if err := fs.Parse(args); err != nil {
+	rest, err := parseFlagsAnywhere(fs, args)
+	if err != nil {
 		os.Exit(2)
 	}
-	rest := fs.Args()
-	if len(rest) == 0 {
+	if len(rest) != 1 {
 		fmt.Fprintln(os.Stderr, "usage: hexplus user add <name> --password <pw> [--expire-days N] [--limit N]")
 		os.Exit(2)
 	}
@@ -595,11 +595,11 @@ func runUserExport(args []string) {
 	remotePort := fs.Int("remote-port", 1194, "OpenVPN server port")
 	proto := fs.String("proto", "udp", "OpenVPN proto (udp|tcp)")
 	outFile := fs.String("out", "", "write to this path (default: stdout)")
-	if err := fs.Parse(args); err != nil {
+	rest, err := parseFlagsAnywhere(fs, args)
+	if err != nil {
 		os.Exit(2)
 	}
-	rest := fs.Args()
-	if len(rest) == 0 {
+	if len(rest) != 1 {
 		fmt.Fprintln(os.Stderr, "usage: hexplus user export <name> [--remote host] [--out path]")
 		os.Exit(2)
 	}
@@ -680,11 +680,11 @@ func runProxyAdd(args []string) {
 	preset := fs.String("preset", "101", "status preset: 101 (WebSocket spoof, default), 200, 400, 520")
 	code := fs.String("status-code", "", "override status code (digits only)")
 	msg := fs.String("status-msg", "", `override status message (literal \r\n becomes CRLF)`)
-	if err := fs.Parse(args); err != nil {
+	rest, err := parseFlagsAnywhere(fs, args)
+	if err != nil {
 		os.Exit(2)
 	}
-	rest := fs.Args()
-	if len(rest) == 0 {
+	if len(rest) != 1 {
 		fmt.Fprintln(os.Stderr, "usage: hexplus proxy add --port=N [--target host:port] [--preset 101|200|400|520] <name>")
 		os.Exit(2)
 	}
