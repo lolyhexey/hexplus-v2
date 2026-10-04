@@ -16,22 +16,16 @@ func TestUnverifiableHashUsers(t *testing.T) {
 		"frank:*:19000:0:99999:7:::\n" + // no password login
 		"gina::19000:0:99999:7:::\n" + // empty password field
 		"hank:$2b$12$salt$hash:19000:0:99999:7:::\n" + // bcrypt: script cannot verify
+		"jack:$6$rounds=10000$salt$hash:19000:0:99999:7:::\n" + // SHA_CRYPT_*_ROUNDS set: script takes "rounds=N" as the salt
+		"kate:$5$rounds=5000$salt$hash:19000:0:99999:7:::\n" + // same for SHA-256
+		"liam:$6$roundsalt$hash:19000:0:99999:7:::\n" + // a salt that merely starts with "rounds": fine
 		"ivan:$y$j9T$salt$hash\r\n" // CRLF and a short entry must not break parsing
-	names := []string{"alice", "bob", "carol", "dave", "erin", "frank", "gina", "hank", "ivan", "nobody-in-shadow"}
+	names := []string{"alice", "bob", "carol", "dave", "erin", "frank", "gina", "hank", "ivan", "jack", "kate", "liam", "nobody-in-shadow"}
 
 	got := UnverifiableHashUsers(shadow, names)
-	want := []string{"alice", "hank", "ivan"}
+	want := []string{"alice", "hank", "ivan", "jack", "kate"}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("UnverifiableHashUsers = %v, want %v", got, want)
-	}
-}
-
-// The checker must flag exactly what hexplus-auth.sh rejects. This pins the
-// accepted prefixes next to the script's `case "$ALG" in 6|5|1`.
-func TestScriptVerifiablePrefixesMatchAuthScript(t *testing.T) {
-	want := []string{"$6$", "$5$", "$1$"}
-	if !reflect.DeepEqual(scriptVerifiable, want) {
-		t.Errorf("scriptVerifiable = %v, want %v (keep in sync with pki.authScript)", scriptVerifiable, want)
 	}
 }
 

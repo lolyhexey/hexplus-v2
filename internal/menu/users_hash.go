@@ -1,6 +1,7 @@
 package menu
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -15,6 +16,10 @@ var senhaDir = "/etc/SSHPlus/senha"
 
 // setUserPassword is user.SetPassword; a variable so tests can fake it.
 var setUserPassword = user.SetPassword
+
+// readUnverifiable is user.ReadUnverifiableHashUsers; a variable so tests can
+// fake /etc/shadow.
+var readUnverifiable = user.ReadUnverifiableHashUsers
 
 // repairUnverifiableHashes re-applies each user's stored password with
 // user.SetPassword, which hashes as SHA-512, so a user whose hash the OpenVPN
@@ -31,10 +36,21 @@ var setUserPassword = user.SetPassword
 func repairUnverifiableHashes(names []string) (fixed, noStored []string, failed map[string]error) {
 	failed = map[string]error{}
 	for _, name := range names {
+		// Names come from /etc/passwd; never let one climb out of senhaDir.
+		if name == "" || name == "." || name == ".." || strings.ContainsAny(name, "/\\\x00") {
+			noStored = append(noStored, name)
+			continue
+		}
 		raw, err := os.ReadFile(senhaDir + "/" + name)
 		pw := strings.TrimRight(string(raw), "\r\n")
 		if err != nil || pw == "" {
 			noStored = append(noStored, name)
+			continue
+		}
+		// chpasswd reads "name:password" lines: an embedded line break would
+		// start a second entry.
+		if strings.ContainsAny(pw, "\r\n") {
+			failed[name] = errors.New("รหัสผ่านที่เก็บไว้มีการขึ้นบรรทัดใหม่")
 			continue
 		}
 		if err := setUserPassword(name, pw); err != nil {
@@ -42,6 +58,27 @@ func repairUnverifiableHashes(names []string) (fixed, noStored []string, failed 
 			continue
 		}
 		fixed = append(fixed, name)
+	}
+
+	// Do not report success on faith: chpasswd can still write a hash the
+	// script rejects (e.g. login.defs sets SHA_CRYPT_*_ROUNDS, giving
+	// "$6$rounds=N$..."). If /etc/shadow cannot be read, nothing is claimed
+	// beyond "password re-applied".
+	if len(fixed) > 0 {
+		if still, err := readUnverifiable(fixed); err == nil && len(still) > 0 {
+			stillBad := map[string]bool{}
+			for _, n := range still {
+				stillBad[n] = true
+				failed[n] = errors.New("ตั้งรหัสผ่านใหม่แล้วแต่ hash ยังใช้ login OpenVPN ไม่ได้ (ตรวจ SHA_CRYPT_*_ROUNDS ใน /etc/login.defs)")
+			}
+			kept := fixed[:0]
+			for _, n := range fixed {
+				if !stillBad[n] {
+					kept = append(kept, n)
+				}
+			}
+			fixed = kept
+		}
 	}
 	return fixed, noStored, failed
 }
@@ -65,7 +102,7 @@ func unverifiableHashSet(names []string) map[string]bool {
 // operator answers y, repairs them. Default is no.
 func offerHashRepair(readAnswer func(label string) (string, error), bad []string) {
 	fmt.Println()
-	fmt.Printf("%s[คำเตือน]%s ผู้ใช้สีแดง %d คน login OpenVPN ไม่ได้ (รหัสผ่านเข้ารหัสแบบ yescrypt ที่สคริปต์ตรวจสอบไม่รองรับ): %s%s\n",
+	fmt.Printf("%s[คำเตือน]%s ผู้ใช้สีแดง %d คน login OpenVPN ไม่ได้ (รหัสผ่านถูกเข้ารหัสในรูปแบบที่สคริปต์ตรวจสอบไม่รองรับ เช่น yescrypt): %s%s\n",
 		cYelBold, cWhtBold, len(bad), strings.Join(bad, ", "), cReset)
 	fmt.Println(cWhtBold + "ตั้งรหัสผ่านที่เก็บไว้ใน " + senhaDir + " ใหม่เป็น SHA-512 ตอนนี้เลยไหม? (ใช้รหัสเดิมที่เมนูเคยตั้งไว้)" + cReset)
 	ans, err := readAnswer("[y/N]:")

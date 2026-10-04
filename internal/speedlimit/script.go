@@ -21,6 +21,12 @@ const learnAddressScript = `#!/bin/sh
 # Managed by hexplus; do not edit by hand.
 # OpenVPN invocation: $1=add|update|delete  $2=tun_ip  $3=cn  env: dev
 
+# OpenVPN runs this hook with no PATH at all. dash and busybox fall back to a
+# default that includes /sbin and /usr/sbin; bash-as-sh (RHEL family) does
+# not, and ip/tc live in /usr/sbin there.
+PATH="${PATH:+$PATH:}/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+export PATH
+
 CONF=/etc/openvpn/hexplus-speedlimit.conf
 DEV="${dev:-}"
 

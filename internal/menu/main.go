@@ -14,6 +14,8 @@ import (
 	"os"
 	"strings"
 	"unicode"
+
+	"github.com/lolyhexey/hexplus/internal/speedlimit"
 )
 
 // thaiVisualWidth returns the number of terminal columns a string occupies.
@@ -50,6 +52,8 @@ func padRight(s string, width int) string {
 // via option 00 or by sending EOF (Ctrl+D).
 func Run() error {
 	ensureSSHConfig()
+	// Best effort: a failure only means an older shaper script keeps running.
+	_ = speedlimit.EnsureScript()
 	r := bufio.NewReader(os.Stdin)
 	for {
 		if err := paintMainMenu(); err != nil {
