@@ -22,6 +22,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/lolyhexey/hexplus/internal/firewall"
 	"github.com/lolyhexey/hexplus/internal/paths"
 	"github.com/lolyhexey/hexplus/internal/pki"
 	"github.com/lolyhexey/hexplus/internal/service"
@@ -182,6 +183,17 @@ func setupInstanceNAT(inst Instance) {
 		_ = exec.Command("iptables", rule...).Run()
 	}
 	persistRCLocal("iptables -t nat -A POSTROUTING -s " + inst.Subnet() + " -j MASQUERADE")
+
+	// NAT alone is not enough on a host whose FORWARD policy is DROP (any
+	// Docker host): without a FORWARD rule the instance's clients
+	// authenticate and then have no internet. The rules match every tun
+	// device, so this is a no-op when the primary install already added
+	// them.
+	if egress, err := firewall.DetectEgress(); err == nil && firewall.ApplyForward(egress) == nil {
+		for _, l := range firewall.RCLocalLines(egress) {
+			persistRCLocal(l)
+		}
+	}
 }
 
 func removeInstanceNAT(inst Instance) {

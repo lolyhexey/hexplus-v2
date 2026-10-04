@@ -23,6 +23,7 @@ import (
 	"io/fs"
 
 	"github.com/lolyhexey/hexplus/internal/assets"
+	"github.com/lolyhexey/hexplus/internal/firewall"
 	"github.com/lolyhexey/hexplus/internal/ovpninstance"
 	"github.com/lolyhexey/hexplus/internal/pki"
 	"github.com/lolyhexey/hexplus/internal/progress"
@@ -1629,15 +1630,12 @@ func setupNetworking(port int, proto string) {
 	exec.Command("iptables", "-t", "nat", "-A", "POSTROUTING",
 		"-s", "10.8.0.0/16", "-j", "MASQUERADE").Run()
 
-	// 4. Open the VPN port + allow forwarding if a DROP/REJECT policy exists.
+	// 4. Open the VPN port if a DROP/REJECT policy exists. FORWARD is
+	// opened separately in step 6b, after the SMTP/POP3 DROP rules.
 	out, _ := exec.Command("iptables", "-L", "-n").Output()
 	if strings.Contains(string(out), "REJECT") || strings.Contains(string(out), "DROP") {
 		exec.Command("iptables", "-I", "INPUT", "-p", proto,
 			"--dport", strconv.Itoa(port), "-j", "ACCEPT").Run()
-		exec.Command("iptables", "-I", "FORWARD",
-			"-s", "10.8.0.0/16", "-j", "ACCEPT").Run()
-		exec.Command("iptables", "-I", "FORWARD",
-			"-m", "state", "--state", "RELATED,ESTABLISHED", "-j", "ACCEPT").Run()
 	}
 
 	// 5. Disable IPv6 (v1 conexao does this to prevent leaks).
@@ -1656,6 +1654,21 @@ func setupNetworking(port int, proto string) {
 		exec.Command("iptables", args...).Run()
 	}
 
+	// 6b. Let VPN clients forward out of the egress interface, and nowhere
+	// else (not into Docker bridges or other local networks). The rules sit
+	// at the top of FORWARD, scoped to tun+, together with a tun+-scoped
+	// SMTP/POP3 block that wins over the ACCEPT. On a host with a DROP policy
+	// (Docker sets one) this is what gives clients internet access; it is
+	// persisted below because Docker rebuilds FORWARD at every boot.
+	var forwardLines []string
+	if egress, err := firewall.DetectEgress(); err != nil {
+		fmt.Println(cYelBold + "[คำเตือน]" + cWhtBold + " หา interface ขาออกไม่ได้ จึงไม่ได้เปิด FORWARD ให้ลูกค้า VPN: " + err.Error() + cReset)
+	} else if err := firewall.ApplyForward(egress); err != nil {
+		fmt.Println(cYelBold + "[คำเตือน]" + cWhtBold + " เปิด FORWARD ไม่สำเร็จ: " + err.Error() + cReset)
+	} else {
+		forwardLines = firewall.RCLocalLines(egress)
+	}
+
 	// 7. Persist all rules across reboots via rc.local.
 	rclocal := "/etc/rc.local"
 	if _, err := os.Stat(rclocal); os.IsNotExist(err) {
@@ -1672,8 +1685,14 @@ func setupNetworking(port int, proto string) {
 		"iptables -A FORWARD -p tcp --dport 25 -j DROP",
 		"iptables -A FORWARD -p tcp --dport 110 -j DROP",
 	}
+	rules = append(rules, forwardLines...)
 	if raw, err := os.ReadFile(rclocal); err == nil {
 		content := string(raw)
+		if len(forwardLines) > 0 {
+			// A reinstall after the egress interface changed must not leave
+			// the old "-o <iface>" line behind.
+			content = firewall.DropStaleRCLocal(content, forwardLines)
+		}
 		var extra []string
 		for _, rule := range rules {
 			if !strings.Contains(content, rule) {
@@ -1688,7 +1707,10 @@ func setupNetworking(port int, proto string) {
 				insertAt-- // before last line
 			}
 			newLines := append(lines[:insertAt], append(extra, lines[insertAt:]...)...)
-			_ = os.WriteFile(rclocal, []byte(strings.Join(newLines, "\n")+"\n"), 0o755)
+			content = strings.Join(newLines, "\n") + "\n"
+		}
+		if content != string(raw) {
+			_ = os.WriteFile(rclocal, []byte(content), 0o755)
 		}
 	}
 }
@@ -1790,6 +1812,11 @@ func cleanupOpenVPN() {
 		fmt.Println(cYelBold + "  - iptables MASQUERADE 10.8.0.0/16" + cReset)
 	}
 
+	// Remove the FORWARD rules (scoped tun+ rules and the legacy broad
+	// 10.8.0.0/16 ACCEPT). Extra instances were removed by the caller, so
+	// nothing else still needs them.
+	firewall.RemoveForward()
+
 	// Read any legacy SNAT --to <IP> lines from rc.local and tear each one
 	// down. Repeated installs with a changing public IP accumulate multiple
 	// SNAT lines; the previous loop overwrote a single legacyIP and left
@@ -1832,6 +1859,7 @@ func cleanupOpenVPN() {
 		"iptables -A FORWARD -p tcp --dport 25 -j DROP",
 		"iptables -A FORWARD -p tcp --dport 110 -j DROP",
 	}
+	cleanPrefixes = append(cleanPrefixes, firewall.RCLocalPrefixes...)
 	if raw, err := os.ReadFile(rclocal); err == nil {
 		var kept []string
 		for _, line := range strings.Split(string(raw), "\n") {
