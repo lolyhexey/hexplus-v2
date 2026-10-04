@@ -16,6 +16,7 @@ import (
 	"text/template"
 
 	"github.com/lolyhexey/hexplus/internal/paths"
+	"github.com/lolyhexey/hexplus/internal/unitpolicy"
 )
 
 const systemdUnitDir = "/etc/systemd/system"
@@ -31,7 +32,7 @@ Description=HEXPLUS proxy '{{.Name}}' (port {{.Port}}, default {{.DefaultHost}})
 Documentation=https://github.com/lolyhexey/hexplus-v2
 After=network-online.target
 Wants=network-online.target
-
+` + unitpolicy.StartLimit + `
 [Service]
 Type=simple
 ExecStart={{.SelfPath}} proxy run {{.Name}}

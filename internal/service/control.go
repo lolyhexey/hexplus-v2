@@ -29,9 +29,9 @@ type State struct {
 }
 
 // Start calls `systemctl start hexplus-<name>`. Returns nil on success.
-func Start(svc Service) error     { return run("start", svc.UnitName) }
+func Start(svc Service) error     { return runAfterReset("start", svc.UnitName) }
 func Stop(svc Service) error      { return run("stop", svc.UnitName) }
-func Restart(svc Service) error   { return run("restart", svc.UnitName) }
+func Restart(svc Service) error   { return RestartUnit(svc.UnitName) }
 func Enable(svc Service) error    { return run("enable", svc.UnitName) }
 func Disable(svc Service) error   { return run("disable", svc.UnitName) }
 func TryReload(svc Service) error { return run("try-reload-or-restart", svc.UnitName) }
@@ -126,9 +126,27 @@ func StatusAll() ([]State, error) {
 // systemctl in PATH"; callers can unwrap and present a focused message.
 var errSystemctlMissing = errors.New("systemctl not found in PATH; is systemd installed?")
 
+// systemctl runs the binary and returns stdout+stderr. A variable so tests
+// can fake it.
+var systemctl = func(args ...string) ([]byte, error) {
+	return exec.Command("systemctl", args...).CombinedOutput()
+}
+
+// runAfterReset clears a failed state and the start-rate counter before a
+// start or restart. Unit files carry StartLimitIntervalSec (unitpolicy):
+// once a crash loop trips it, systemd refuses every start with
+// "start-limit-hit" until the window expires or reset-failed is called, so
+// an operator pressing restart would be refused for minutes. The reset is
+// best-effort; a unit that is not failed makes it a no-op.
+func RestartUnit(unit string) error { return runAfterReset("restart", unit) }
+
+func runAfterReset(verb, unit string) error {
+	_, _ = systemctl("reset-failed", unit)
+	return run(verb, unit)
+}
+
 func run(verb, unit string) error {
-	cmd := exec.Command("systemctl", verb, unit)
-	out, err := cmd.CombinedOutput()
+	out, err := systemctl(verb, unit)
 	if err != nil {
 		if errors.Is(err, exec.ErrNotFound) {
 			return errSystemctlMissing

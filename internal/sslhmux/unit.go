@@ -13,6 +13,7 @@ import (
 	"text/template"
 
 	"github.com/lolyhexey/hexplus/internal/paths"
+	"github.com/lolyhexey/hexplus/internal/unitpolicy"
 )
 
 const systemdUnitDir = "/etc/systemd/system"
@@ -21,7 +22,7 @@ const unitTemplate = `[Unit]
 Description=HEXPLUS SSLH Multiplex (port {{.Port}})
 After=network-online.target
 Wants=network-online.target
-
+` + unitpolicy.StartLimit + `
 [Service]
 Type=simple
 ExecStart={{.SelfPath}} sslhmux run
