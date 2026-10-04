@@ -15,6 +15,7 @@ import (
 	"strings"
 	"unicode"
 
+	"github.com/lolyhexey/hexplus/internal/pki"
 	"github.com/lolyhexey/hexplus/internal/speedlimit"
 )
 
@@ -52,8 +53,9 @@ func padRight(s string, width int) string {
 // via option 00 or by sending EOF (Ctrl+D).
 func Run() error {
 	ensureSSHConfig()
-	// Best effort: a failure only means an older shaper script keeps running.
+	// Best effort: a failure only means an older script keeps running.
 	_ = speedlimit.EnsureScript()
+	_ = pki.EnsureAuthScript()
 	r := bufio.NewReader(os.Stdin)
 	for {
 		if err := paintMainMenu(); err != nil {
