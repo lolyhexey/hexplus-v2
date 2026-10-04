@@ -1081,6 +1081,12 @@ func runListUsers(r *bufio.Reader) error {
 	sshOnline := readSSHLogins()
 	ovpnOnline := readOpenVPNUsers()
 
+	names := make([]string, 0, len(records))
+	for _, rec := range records {
+		names = append(names, rec.Name)
+	}
+	badHash := unverifiableHashSet(names)
+
 	tUser, tOnline, tExpired := 0, 0, 0
 	for _, rec := range records {
 		tUser++
@@ -1117,8 +1123,12 @@ func runListUsers(r *bufio.Reader) error {
 			tOnline++
 		}
 
+		nameColor := cYelBold
+		if badHash[rec.Name] {
+			nameColor = cRedBold
+		}
 		fmt.Printf("%s %-15s %s%-13s %s%-10s %s\n",
-			cYelBold, rec.Name,
+			nameColor, rec.Name,
 			cWhtBold, pass,
 			cWhtBold, limit,
 			expCol)
@@ -1130,6 +1140,15 @@ func runListUsers(r *bufio.Reader) error {
 		cYelBold, cGrnBold, cWhtBold, tOnline,
 		cYelBold, cRedBold, cWhtBold, tExpired,
 		cYelBold, cReset)
+	if len(badHash) > 0 {
+		var bad []string
+		for _, n := range names {
+			if badHash[n] {
+				bad = append(bad, n)
+			}
+		}
+		offerHashRepair(func(label string) (string, error) { return readLine(r, label) }, bad)
+	}
 	waitEnter(r)
 	return nil
 }
