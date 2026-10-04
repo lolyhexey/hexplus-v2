@@ -22,7 +22,28 @@ const learnAddressScript = `#!/bin/sh
 # OpenVPN invocation: $1=add|update|delete  $2=tun_ip  $3=cn  env: dev
 
 CONF=/etc/openvpn/hexplus-speedlimit.conf
-DEV="${dev:-tun0}"
+DEV="${dev:-}"
+
+# OpenVPN runs 'delete' with an EMPTY environment (multi.c calls
+# learn_address_script with no instance when an address is removed), so
+# $dev is unset there. Defaulting to tun0 would tear down the class of a
+# client on ANOTHER instance: class ids come from the last two octets, which
+# repeat across 10.8.x.y and 10.9.x.y. Take the device from the kernel
+# route to the client's tun address instead.
+if [ -z "$DEV" ]; then
+    DEV=$(ip -o route get "$2" 2>/dev/null | awk '{for (i = 1; i < NF; i++) if ($i == "dev") { print $(i + 1); exit }}')
+fi
+
+# Only ever shape a tun device. If the instance is already gone the route
+# lookup lands on the default interface, and tc deletes there would hit
+# unrelated traffic.
+case "$DEV" in
+    tun*) ;;
+    *) exit 0 ;;
+esac
+case "${DEV#tun}" in
+    ''|*[!0-9]*) exit 0 ;;
+esac
 IFB="ifb${DEV#tun}"
 
 # Which config key applies to this OpenVPN instance? The primary uses
