@@ -127,3 +127,131 @@ func TestDeleteNeverTouchesNonTunDevices(t *testing.T) {
 		t.Errorf("dev=tunnel: expected no tc calls, got %q", calls)
 	}
 }
+
+// OpenVPN gives the hook no PATH. bash-as-sh (RHEL family) then looks only in
+// /usr/local/bin:/usr/bin, where neither ip nor tc live, while dash and
+// busybox invent a default that includes the sbin directories - so running
+// with PATH unset would pass on Debian even without the fix. The test pins a
+// PATH that has no sbin and checks what the script turns it into (probe: the
+// script cut off right after its PATH setup).
+func TestScriptSuppliesSbinDirectories(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("needs a POSIX sh")
+	}
+	if _, err := exec.LookPath("sh"); err != nil {
+		t.Skip("sh not available")
+	}
+	dir := t.TempDir()
+	script := filepath.Join(dir, "learn-address.sh")
+	probe := strings.Replace(learnAddressScript, "\nCONF=", "\necho \"PATH=$PATH\" >&2; exit 0\nCONF=", 1)
+	if probe == learnAddressScript {
+		t.Fatal("could not insert the probe: CONF= marker moved")
+	}
+	if err := os.WriteFile(script, []byte(probe), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	pathOf := func(env string) string {
+		cmd := exec.Command("sh", script, "delete", "10.9.0.5", "")
+		cmd.Env = []string{env}
+		out, _ := cmd.CombinedOutput()
+		return strings.TrimSpace(string(out))
+	}
+
+	// A PATH without sbin keeps its own entries first and gains the sbin ones.
+	got := pathOf("PATH=/usr/bin:/bin")
+	if !strings.HasPrefix(got, "PATH=/usr/bin:/bin:") {
+		t.Errorf("existing PATH entries must stay first, got %q", got)
+	}
+	for _, want := range []string{"/usr/sbin", "/sbin"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("PATH %q lacks %s", got, want)
+		}
+	}
+
+	// An empty PATH must not become a leading colon, which would put the
+	// current directory on the search path.
+	got = pathOf("PATH=")
+	if strings.HasPrefix(got, "PATH=:") {
+		t.Errorf("empty PATH produced a leading colon: %q", got)
+	}
+	if !strings.Contains(got, "/usr/sbin") {
+		t.Errorf("empty PATH lacks /usr/sbin: %q", got)
+	}
+}
+
+// If ip cannot be run the device stays unknown, and the hook must still
+// exit 0 without touching tc.
+func TestDeleteWithBrokenIpExitsZeroWithoutTc(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("needs a POSIX sh")
+	}
+	if _, err := exec.LookPath("sh"); err != nil {
+		t.Skip("sh not available")
+	}
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "bin")
+	if err := os.Mkdir(bin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	log := filepath.Join(dir, "log")
+	for name, body := range map[string]string{
+		"ip": "#!/bin/sh\nexit 1\n",
+		"tc": "#!/bin/sh\necho \"tc $*\" >> \"$LOG\"\n",
+	} {
+		if err := os.WriteFile(filepath.Join(bin, name), []byte(body), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	script := filepath.Join(dir, "learn-address.sh")
+	if err := os.WriteFile(script, []byte(learnAddressScript), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("sh", script, "delete", "10.9.0.5", "")
+	cmd.Env = []string{"PATH=" + bin + ":/usr/bin:/bin", "LOG=" + log}
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("must exit 0 when ip fails: %v\n%s", err, out)
+	}
+	if raw, _ := os.ReadFile(log); len(raw) != 0 {
+		t.Errorf("tc was called although the device is unknown: %q", raw)
+	}
+}
+
+func TestEnsureScriptAt(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "hexplus-learn-address")
+
+	// No hook installed (no speed cap was ever set): leave the host alone.
+	if err := ensureScriptAt(path); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("EnsureScript created the hook on a host that never had one: %v", err)
+	}
+
+	// An older release's script is replaced by the embedded one, executable.
+	if err := os.WriteFile(path, []byte("#!/bin/sh\n# old release\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := ensureScriptAt(path); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := os.ReadFile(path)
+	if string(got) != learnAddressScript {
+		t.Errorf("old script was not replaced")
+	}
+	if runtime.GOOS != "windows" {
+		if st, _ := os.Stat(path); st.Mode().Perm()&0o111 == 0 {
+			t.Errorf("rewritten hook is not executable: %v", st.Mode())
+		}
+	}
+
+	// Already current: no rewrite (mtime would change under busy systems' caches).
+	before, _ := os.Stat(path)
+	if err := ensureScriptAt(path); err != nil {
+		t.Fatal(err)
+	}
+	after, _ := os.Stat(path)
+	if !after.ModTime().Equal(before.ModTime()) {
+		t.Errorf("identical script was rewritten")
+	}
+}

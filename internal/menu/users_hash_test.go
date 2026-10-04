@@ -87,3 +87,57 @@ func TestOfferHashRepairAcceptsY(t *testing.T) {
 		}
 	}
 }
+
+// chpasswd can still write a hash the script rejects (login.defs with
+// SHA_CRYPT_*_ROUNDS gives "$6$rounds=N$..."). A repair must not claim
+// success for such a user.
+func TestRepairDoesNotReportUnverifiableResultAsFixed(t *testing.T) {
+	writeSenha(t, map[string]string{"alice": "pw1\n", "bob": "pw2\n"})
+	fakeSetPassword(t, nil)
+	old := readUnverifiable
+	readUnverifiable = func(names []string) ([]string, error) { return []string{"bob"}, nil }
+	t.Cleanup(func() { readUnverifiable = old })
+
+	fixed, _, failed := repairUnverifiableHashes([]string{"alice", "bob"})
+	if want := []string{"alice"}; !reflect.DeepEqual(fixed, want) {
+		t.Errorf("fixed = %v, want %v", fixed, want)
+	}
+	if failed["bob"] == nil || len(failed) != 1 {
+		t.Errorf("failed = %v, want only bob", failed)
+	}
+}
+
+// If /etc/shadow cannot be re-read after the repair, we only know that the
+// password was re-applied; it must still be reported as such.
+func TestRepairKeepsFixedWhenShadowUnreadable(t *testing.T) {
+	writeSenha(t, map[string]string{"alice": "pw1\n"})
+	fakeSetPassword(t, nil)
+	old := readUnverifiable
+	readUnverifiable = func([]string) ([]string, error) { return nil, errors.New("permission denied") }
+	t.Cleanup(func() { readUnverifiable = old })
+
+	fixed, _, failed := repairUnverifiableHashes([]string{"alice"})
+	if !reflect.DeepEqual(fixed, []string{"alice"}) || len(failed) != 0 {
+		t.Errorf("fixed=%v failed=%v", fixed, failed)
+	}
+}
+
+func TestRepairRejectsUnsafeInput(t *testing.T) {
+	writeSenha(t, map[string]string{"multi": "pw\nroot:owned\n", "ok": "pw\n"})
+	calls := fakeSetPassword(t, nil)
+
+	fixed, noStored, failed := repairUnverifiableHashes([]string{"../etc/passwd", "a/b", "..", "multi", "ok"})
+
+	if want := []string{"ok"}; !reflect.DeepEqual(fixed, want) {
+		t.Errorf("fixed = %v, want %v", fixed, want)
+	}
+	if want := []string{"../etc/passwd", "a/b", ".."}; !reflect.DeepEqual(noStored, want) {
+		t.Errorf("noStored = %v, want %v (path-like names are never read)", noStored, want)
+	}
+	if failed["multi"] == nil {
+		t.Errorf("a stored password with a line break must be refused, failed = %v", failed)
+	}
+	if want := [][2]string{{"ok", "pw"}}; !reflect.DeepEqual(*calls, want) {
+		t.Errorf("SetPassword calls = %v, want %v", *calls, want)
+	}
+}

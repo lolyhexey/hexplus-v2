@@ -23,7 +23,7 @@ menu
 ### Service ที่รองรับ
 | Service | เวอร์ชัน | หมายเหตุ |
 |---|---|---|
-| OpenVPN | 2.5.9 | static musl, auth ผ่าน PAM หรือ openssl-passwd |
+| OpenVPN | 2.5.9 | static musl, auth ผ่านสคริปต์ openssl-passwd (build ไม่รองรับ plugin/PAM) |
 | Squid | 3.3.8 | glibc Ubuntu 20.04, OpenSSL 1.0.2u, full-feature |
 | Dropbear | 2024.85 | static musl, multi-binary (dropbear/key/scp) |
 | OpenSSH | system | จัดการ port ผ่านเมนู |

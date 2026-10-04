@@ -87,3 +87,53 @@ func TestRealYescryptRepair(t *testing.T) {
 		t.Errorf("after repair detected %v, want %v", after, want)
 	}
 }
+
+// With SHA_CRYPT_MIN_ROUNDS/MAX_ROUNDS in /etc/login.defs, chpasswd -c SHA512
+// writes "$6$rounds=N$salt$hash". hexplus-auth.sh splits on '$' and takes
+// "rounds=N" as the salt, so it rejects that hash. The detector must flag it,
+// and a repair must not claim success, because chpasswd writes the same shape
+// again. Same guards and container advice as TestRealYescryptRepair; this one
+// also edits /etc/login.defs.
+func TestRealRoundsHashIsFlaggedAndNotReportedFixed(t *testing.T) {
+	if os.Getenv("HEXPLUS_USER_IT") != "1" {
+		t.Skip("set HEXPLUS_USER_IT=1 in a throwaway container to run")
+	}
+	if os.Geteuid() != 0 {
+		t.Skip("needs root")
+	}
+	sh := func(cmd string) string {
+		t.Helper()
+		out, err := exec.Command("sh", "-c", cmd).CombinedOutput()
+		if err != nil {
+			t.Fatalf("%s: %v\n%s", cmd, err, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	orig, err := os.ReadFile("/etc/login.defs")
+	if err != nil {
+		t.Skip("no /etc/login.defs")
+	}
+	t.Cleanup(func() { _ = os.WriteFile("/etc/login.defs", orig, 0o644) })
+	sh("printf 'SHA_CRYPT_MIN_ROUNDS 6000\nSHA_CRYPT_MAX_ROUNDS 6000\n' >> /etc/login.defs")
+
+	sh("useradd -M hxrounds")
+	t.Cleanup(func() { _ = exec.Command("userdel", "hxrounds").Run() })
+	sh(`echo 'hxrounds:pw rounds' | chpasswd -c SHA512`)
+	if hash := sh("getent shadow hxrounds | cut -d: -f2"); !strings.HasPrefix(hash, "$6$rounds=6000$") {
+		t.Skipf("chpasswd did not write a rounds= hash on this host: %.20s", hash)
+	}
+
+	bad, err := user.ReadUnverifiableHashUsers([]string{"hxrounds"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(bad, []string{"hxrounds"}) {
+		t.Fatalf("a rounds= hash must be flagged, got %v", bad)
+	}
+
+	writeSenha(t, map[string]string{"hxrounds": "pw rounds\n"})
+	fixed, noStored, failed := repairUnverifiableHashes(bad)
+	if len(fixed) != 0 || len(noStored) != 0 || failed["hxrounds"] == nil {
+		t.Errorf("repair must report failure, got fixed=%v noStored=%v failed=%v", fixed, noStored, failed)
+	}
+}

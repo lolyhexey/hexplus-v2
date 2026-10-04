@@ -14,7 +14,8 @@ var scriptVerifiable = []string{"$6$", "$5$", "$1$"}
 
 // UnverifiableHashUsers returns, sorted, the names in names whose entry in
 // shadow (the contents of /etc/shadow) holds a password hash the OpenVPN
-// auth script cannot verify. Locked accounts ("!", "*") and accounts with
+// auth script cannot verify: a format it does not know, or a $6$/$5$ hash
+// with a "rounds=" parameter. Locked accounts ("!", "*") and accounts with
 // no password are skipped: the script rejects those on purpose.
 func UnverifiableHashUsers(shadow string, names []string) []string {
 	want := make(map[string]bool, len(names))
@@ -34,7 +35,10 @@ func UnverifiableHashUsers(shadow string, names []string) []string {
 		ok := false
 		for _, p := range scriptVerifiable {
 			if strings.HasPrefix(hash, p) {
-				ok = true
+				// "$6$rounds=N$salt$..." (login.defs sets SHA_CRYPT_*_ROUNDS):
+				// the script splits on '$' and takes "rounds=N" as the salt,
+				// so it can never reproduce the hash.
+				ok = !strings.HasPrefix(hash[len(p):], "rounds=")
 				break
 			}
 		}

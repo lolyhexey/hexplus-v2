@@ -180,3 +180,18 @@ func StripServerConf() error {
 	}
 	return nil
 }
+
+// EnsureScript rewrites the learn-address hook when it is already installed
+// but differs from the embedded version, so a hexplus upgrade reaches hosts
+// that set their speed caps with an older release. OpenVPN execs the script
+// afresh for every event, so no restart is needed. A host without the hook
+// (no speed cap ever set) is left alone: SetLimit installs it on demand.
+func EnsureScript() error { return ensureScriptAt(ScriptPath) }
+
+func ensureScriptAt(path string) error {
+	cur, err := os.ReadFile(path)
+	if err != nil || string(cur) == learnAddressScript {
+		return nil
+	}
+	return os.WriteFile(path, []byte(learnAddressScript), 0o755)
+}
