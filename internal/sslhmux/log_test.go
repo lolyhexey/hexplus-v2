@@ -33,22 +33,24 @@ func captureFailLog(t *testing.T) func() []string {
 	}
 }
 
-func deadBackendAddr(t *testing.T) string {
+// deadPort returns a loopback port nothing listens on.
+func deadPort(t *testing.T) int {
 	t.Helper()
 	l, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
-	addr := l.Addr().String()
-	l.Close() // nothing listens here any more
-	return addr
+	port := portOf(t, l.Addr().String())
+	l.Close()
+	return port
 }
 
-// probe sends first to a mux serving cfg and returns once the mux has closed
-// the connection (every probe below ends in a drop).
-func probe(t *testing.T, cfg Config, first []byte) {
+// probe sends first to a mux resolving its backends from l and returns once
+// the mux has closed the connection (every probe below ends in a drop).
+func probe(t *testing.T, l live, first []byte) {
 	t.Helper()
-	muxAddr := listenLoopback(t, func(c net.Conn) { handleMuxConn(c, cfg) })
+	useLive(t, l)
+	muxAddr, _ := startMux(t)
 	c, err := net.Dial("tcp", muxAddr)
 	if err != nil {
 		t.Fatal(err)
@@ -66,41 +68,39 @@ func probe(t *testing.T, cfg Config, first []byte) {
 	}
 }
 
-func TestDetect(t *testing.T) {
-	cfg := Config{SSH: "ssh:1", SSL: "ssl:2", HTTP: "http:3", OpenVPN: "ovpn:4"}
+func TestClassify(t *testing.T) {
 	for _, tc := range []struct {
-		name  string
-		peek  []byte
-		kind  string
-		wants string
+		name string
+		peek []byte
+		want string
 	}{
-		{"ssh", []byte("SSH-2.0-x"), "ssh", "ssh:1"},
-		{"tls", []byte{0x16, 0x03, 0x01, 0x02}, "ssl", "ssl:2"},
-		{"http get", []byte("GET / HT"), "http", "http:3"},
-		{"http connect", []byte("CONNECT "), "http", "http:3"},
-		{"openvpn", []byte{0x00, 0x0e, 0x38, 0x01}, "other/openvpn", "ovpn:4"},
-		{"garbage", []byte{0xde, 0xad}, "other/openvpn", "ovpn:4"},
+		{"ssh", []byte("SSH-2.0-x"), "ssh"},
+		{"tls", []byte{0x16, 0x03, 0x01, 0x02}, "ssl"},
+		{"http get", []byte("GET / HT"), "http"},
+		{"http connect", []byte("CONNECT "), "http"},
+		{"openvpn", []byte{0x00, 0x0e, 0x38, 0x01}, "other/openvpn"},
+		{"garbage", []byte{0xde, 0xad}, "other/openvpn"},
 	} {
-		kind, target := detect(tc.peek, cfg)
-		if kind != tc.kind || target != tc.wants {
-			t.Errorf("%s: detect = %q, %q; want %q, %q", tc.name, kind, target, tc.kind, tc.wants)
+		if got := classify(tc.peek); got != tc.want {
+			t.Errorf("%s: classify = %q, want %q", tc.name, got, tc.want)
 		}
 	}
 }
 
 func TestHandleMuxConnLogsUnreachableBackend(t *testing.T) {
 	lines := captureFailLog(t)
-	dead := deadBackendAddr(t)
-	probe(t, Config{SSH: dead}, []byte("SSH-2.0-"))
+	dead := deadPort(t)
+	probe(t, live{ssh: dead}, []byte("SSH-2.0-"))
 	got := lines()
-	if len(got) != 1 || !strings.Contains(got[0], "ssh backend "+dead+" unreachable") || !strings.Contains(got[0], "client 127.0.0.1") {
-		t.Fatalf("log = %q, want one line naming the kind, the backend and the client", got)
+	want := fmt.Sprintf("ssh backend 127.0.0.1:%d unreachable", dead)
+	if len(got) != 1 || !strings.Contains(got[0], want) || !strings.Contains(got[0], "client 127.0.0.1") {
+		t.Fatalf("log = %q, want one line containing %q and the client", got, want)
 	}
 }
 
 func TestHandleMuxConnLogsMissingBackend(t *testing.T) {
 	lines := captureFailLog(t)
-	probe(t, Config{SSL: ""}, []byte{0x16, 0x03, 0x01, 0x02, 0x00, 0x01, 0x00, 0x01})
+	probe(t, live{}, []byte{0x16, 0x03, 0x01, 0x02, 0x00, 0x01, 0x00, 0x01})
 	got := lines()
 	if len(got) != 1 || !strings.Contains(got[0], "no ssl backend is configured") || !strings.Contains(got[0], "127.0.0.1") {
 		t.Fatalf("log = %q, want one missing-backend line", got)
@@ -109,7 +109,7 @@ func TestHandleMuxConnLogsMissingBackend(t *testing.T) {
 
 func TestHandleMuxConnLabelsUnrecognisedTrafficAsFallback(t *testing.T) {
 	lines := captureFailLog(t)
-	probe(t, Config{OpenVPN: deadBackendAddr(t)}, []byte{0xde, 0xad, 0xbe, 0xef, 0xde, 0xad, 0xbe, 0xef})
+	probe(t, live{ovpn: deadPort(t)}, []byte{0xde, 0xad, 0xbe, 0xef, 0xde, 0xad, 0xbe, 0xef})
 	got := lines()
 	if len(got) != 1 || !strings.Contains(got[0], "other/openvpn backend") {
 		t.Fatalf("log = %q, want the fallback to be named as such", got)
@@ -118,9 +118,9 @@ func TestHandleMuxConnLabelsUnrecognisedTrafficAsFallback(t *testing.T) {
 
 func TestHandleMuxConnFoldsRepeatedFailures(t *testing.T) {
 	lines := captureFailLog(t)
-	cfg := Config{SSH: deadBackendAddr(t)}
+	l := live{ssh: deadPort(t)}
 	for i := 0; i < 20; i++ {
-		probe(t, cfg, []byte("SSH-2.0-"))
+		probe(t, l, []byte("SSH-2.0-"))
 	}
 	if got := lines(); len(got) != 1 {
 		t.Fatalf("20 failed sessions wrote %d lines: %q", len(got), got)
@@ -129,10 +129,11 @@ func TestHandleMuxConnFoldsRepeatedFailures(t *testing.T) {
 
 func TestHandleMuxConnEmptyConnectsAreNotLogged(t *testing.T) {
 	lines := captureFailLog(t)
+	useLive(t, live{ssh: deadPort(t)})
 	for i := 0; i < 20; i++ {
 		a, b := net.Pipe()
 		b.Close() // a scanner or health check that connects and hangs up
-		handleMuxConn(a, Config{SSH: deadBackendAddr(t)})
+		handleMuxConn(a, Config{})
 	}
 	if got := lines(); len(got) != 0 {
 		t.Fatalf("empty connects were logged: %q", got)
