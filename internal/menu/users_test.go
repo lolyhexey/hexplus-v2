@@ -252,3 +252,21 @@ func TestClientListFieldOffsets(t *testing.T) {
 		t.Errorf("field [7] %q disagrees with epoch [8] rendered as %q", parts[7], want)
 	}
 }
+
+func TestMenuPasswordProblem(t *testing.T) {
+	cases := []struct {
+		pw, wantSub string
+	}{
+		{"abcd", ""},
+		{"abc", "อย่างน้อย 4"},
+		{strings.Repeat("a", 127), ""},
+		{strings.Repeat("a", 128), "ไม่เกิน 127"},
+		{"abcd\x00", "อักขระที่ใช้ไม่ได้"},
+	}
+	for _, c := range cases {
+		got := menuPasswordProblem(c.pw)
+		if (c.wantSub == "") != (got == "") || !strings.Contains(got, c.wantSub) {
+			t.Errorf("menuPasswordProblem(%d bytes) = %q, want containing %q", len(c.pw), got, c.wantSub)
+		}
+	}
+}

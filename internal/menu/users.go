@@ -14,6 +14,7 @@ package menu
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -253,8 +254,8 @@ func runCreateUser(r *bufio.Reader) error {
 	if err != nil {
 		return err
 	}
-	if len(pw) < 4 {
-		errLine("รหัสผ่านไม่ถูกต้อง: ต้องมีอย่างน้อย 4 ตัวอักษร")
+	if msg := menuPasswordProblem(pw); msg != "" {
+		errLine(msg)
 		waitEnter(r)
 		return nil
 	}
@@ -396,8 +397,8 @@ func runCreateTrial(r *bufio.Reader) error {
 	if err != nil {
 		return err
 	}
-	if len(pw) < 4 {
-		errLine("รหัสผ่านไม่ถูกต้อง: ต้องมีอย่างน้อย 4 ตัวอักษร")
+	if msg := menuPasswordProblem(pw); msg != "" {
+		errLine(msg)
 		waitEnter(r)
 		return nil
 	}
@@ -999,8 +1000,8 @@ func runChangePassword(r *bufio.Reader) error {
 	if err != nil {
 		return err
 	}
-	if len(pw) < 4 {
-		errLine("รหัสผ่านไม่ถูกต้อง: ต้องมีอย่างน้อย 4 ตัวอักษร")
+	if msg := menuPasswordProblem(pw); msg != "" {
+		errLine(msg)
 		waitEnter(r)
 		return nil
 	}
@@ -1197,4 +1198,20 @@ func chageExpiry(name string) (string, int) {
 		return t.Format("02/01/2006"), days
 	}
 	return "never", 0
+}
+
+// menuPasswordProblem is the menus' password rule: at least 4 characters
+// (v1's rule) plus what OpenVPN and chpasswd can take
+// (user.CheckVPNPassword). It returns the message to show, or "".
+func menuPasswordProblem(pw string) string {
+	if len(pw) < 4 {
+		return "รหัสผ่านไม่ถูกต้อง: ต้องมีอย่างน้อย 4 ตัวอักษร"
+	}
+	if errors.Is(user.CheckVPNPassword(pw), user.ErrPasswordTooLong) {
+		return fmt.Sprintf("รหัสผ่านไม่ถูกต้อง: ยาวได้ไม่เกิน %d ไบต์ (OPENVPN รับไม่ได้)", user.MaxVPNPasswordLen)
+	}
+	if user.CheckVPNPassword(pw) != nil {
+		return "รหัสผ่านไม่ถูกต้อง: มีอักขระที่ใช้ไม่ได้"
+	}
+	return ""
 }
