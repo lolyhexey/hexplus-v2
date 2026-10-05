@@ -17,7 +17,6 @@ import (
 	"github.com/lolyhexey/hexplus/internal/progress"
 	"github.com/lolyhexey/hexplus/internal/service"
 	"github.com/lolyhexey/hexplus/internal/sslhmux"
-	"github.com/lolyhexey/hexplus/internal/ssltunnel"
 )
 
 // sslhMuxMenu is the top-level router for option [07] in the conexao menu.
@@ -57,6 +56,7 @@ func sslhMuxMenu(r *bufio.Reader) error {
 			paintTitleBar("           จัดการ SSLH MULTIPLEX              ")
 			fmt.Printf("\n%sพอร์ต%s: %s%d%s\n\n",
 				cYelBold, cWhtBold, cGrnBold, cfg.Port, cReset)
+			printLiveBackends()
 			paintOptions([][2]string{
 				{"1", "ลบ SSLH MULTIPLEX"},
 				{"2", "รีสตาร์ท SSLH MULTIPLEX"},
@@ -93,45 +93,25 @@ func sslhMuxMenu(r *bufio.Reader) error {
 	}
 }
 
-// detectSSHBackend reads the first SSH port from sshd_config.
-// Defaults to 127.0.0.1:22.
-func detectSSHBackend() string {
-	ports := readSSHPorts()
-	if len(ports) > 0 {
-		return fmt.Sprintf("127.0.0.1:%d", ports[0])
-	}
-	return "127.0.0.1:22"
-}
-
-// detectSSLBackend reads the ssltunnel port config.
-// Falls back to 127.0.0.1:3128 (Squid default).
-func detectSSLBackend() string {
-	cfg, err := ssltunnel.Load()
-	if err == nil && cfg.Port > 0 {
-		return fmt.Sprintf("127.0.0.1:%d", cfg.Port)
-	}
-	return "127.0.0.1:3128"
-}
-
-// detectOpenVPNBackend reads the OpenVPN listen port from server.conf.
-// Defaults to 127.0.0.1:1194.
-func detectOpenVPNBackend() string {
-	for _, path := range []string{"/etc/openvpn/server.conf", "/etc/openvpn/server/server.conf"} {
-		data, err := os.ReadFile(path)
-		if err != nil {
-			continue
+// printLiveBackends shows where each protocol is routed right now. The
+// multiplexer reads these from the services' own configs on every
+// connection, so there is nothing to refresh by hand.
+func printLiveBackends() {
+	live := sslhmux.Detect()
+	fmt.Printf("%sปลายทางปัจจุบัน (อ่านจากการตั้งค่าจริงของแต่ละบริการ)%s\n", cYelBold, cReset)
+	for _, b := range []struct{ label, addr string }{
+		{"SSH     ", live.SSH},
+		{"SSL     ", live.SSL},
+		{"HTTP    ", live.HTTP},
+		{"OPENVPN ", live.OpenVPN},
+	} {
+		addr := b.addr
+		if addr == "" {
+			addr = cRedBold + "ไม่ได้ติดตั้ง" + cReset
 		}
-		for _, line := range strings.Split(string(data), "\n") {
-			line = strings.TrimSpace(line)
-			if strings.HasPrefix(line, "port ") {
-				p := strings.TrimSpace(strings.TrimPrefix(line, "port "))
-				if _, err := strconv.Atoi(p); err == nil {
-					return "127.0.0.1:" + p
-				}
-			}
-		}
+		fmt.Printf("  %s%s%s→ %s%s\n", cWhtBold, b.label, cReset, cGrnBold, addr+cReset)
 	}
-	return "127.0.0.1:1194"
+	fmt.Println()
 }
 
 // sslhMuxInstall runs the full install flow: prompt port → auto-detect
@@ -157,13 +137,10 @@ func sslhMuxInstall(r *bufio.Reader) error {
 		return nil
 	}
 
-	cfg := sslhmux.Config{
-		Port:    port,
-		SSH:     detectSSHBackend(),
-		SSL:     detectSSLBackend(),
-		HTTP:    "127.0.0.1:3128",
-		OpenVPN: detectOpenVPNBackend(),
-	}
+	// The daemon resolves its backends itself on every connection; the
+	// detected addresses are saved only as a snapshot for older binaries.
+	cfg := sslhmux.Detect()
+	cfg.Port = port
 
 	var listening bool
 	if err := progress.Run([]progress.Step{

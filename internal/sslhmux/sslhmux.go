@@ -37,7 +37,10 @@ const (
 	UnitName = "hexplus-sslhmux.service"
 )
 
-// Config is persisted to DBPath.
+// Config is persisted to DBPath. Only Port is used at run time. The backend
+// fields are the addresses detected when SSLH was installed; they are kept in
+// the file for older binaries, and the daemon ignores them in favour of the
+// live ones from Detect.
 type Config struct {
 	Port    int    `json:"port"`
 	SSH     string `json:"ssh"`     // e.g. "127.0.0.1:22"
@@ -101,18 +104,18 @@ type peekedConn struct {
 
 func (c *peekedConn) Read(b []byte) (int, error) { return c.r.Read(b) }
 
-// detect returns the protocol name and backend address for the first bytes of
-// the connection. Match order: SSH → TLS → HTTP → OpenVPN (fallback). The
-// fallback kind is "other/openvpn" because every unrecognised protocol, port
-// scanners included, is sent to OpenVPN.
-func detect(peek []byte, cfg Config) (kind, target string) {
+// classify returns the protocol name for the first bytes of a connection.
+// Match order: SSH → TLS → HTTP → OpenVPN (fallback). The fallback kind is
+// "other/openvpn" because every unrecognised protocol, port scanners
+// included, is sent to OpenVPN.
+func classify(peek []byte) string {
 	// SSH: starts with "SSH-"
 	if len(peek) >= 4 && string(peek[:4]) == "SSH-" {
-		return "ssh", cfg.SSH
+		return "ssh"
 	}
 	// TLS ClientHello: first byte 0x16 (content type handshake), second 0x03
 	if len(peek) >= 2 && peek[0] == 0x16 && peek[1] == 0x03 {
-		return "ssl", cfg.SSL
+		return "ssl"
 	}
 	// HTTP methods (4-byte prefix match)
 	httpPrefixes := [][]byte{
@@ -121,11 +124,11 @@ func detect(peek []byte, cfg Config) (kind, target string) {
 	}
 	for _, p := range httpPrefixes {
 		if bytes.HasPrefix(peek, p) {
-			return "http", cfg.HTTP
+			return "http"
 		}
 	}
 	// Anything else (OpenVPN, etc.)
-	return "other/openvpn", cfg.OpenVPN
+	return "other/openvpn"
 }
 
 // failLog carries the lines an operator has to act on. Successful sessions
@@ -152,7 +155,9 @@ func Run(ctx context.Context) error {
 		return fmt.Errorf("listen :%d: %w", cfg.Port, err)
 	}
 
-	log.Printf("sslhmux: listening on :%d ssh=%s ssl=%s http=%s openvpn=%s", cfg.Port, cfg.SSH, cfg.SSL, cfg.HTTP, cfg.OpenVPN)
+	live := Detect()
+	log.Printf("sslhmux: listening on :%d; backends follow the live configs (now ssh=%s ssl=%s http=%s openvpn=%s)",
+		cfg.Port, live.SSH, live.SSL, live.HTTP, live.OpenVPN)
 
 	go func() {
 		<-ctx.Done()
@@ -164,8 +169,8 @@ func Run(ctx context.Context) error {
 	})
 }
 
-// handleMuxConn peeks up to 8 bytes, detects the protocol, dials the backend,
-// and bridges the connection. Connections that send nothing are closed
+// handleMuxConn peeks up to 8 bytes, detects the protocol, dials its live
+// backend (see detect.go), and bridges the connection. Connections that send nothing are closed
 // silently; a missing or unreachable backend is logged (throttled).
 func handleMuxConn(conn net.Conn, cfg Config) {
 	_ = conn.SetReadDeadline(time.Now().Add(peekTimeout))
@@ -185,9 +190,15 @@ func handleMuxConn(conn net.Conn, cfg Config) {
 	_ = err // err is non-nil on short read or deadline; bytes we have are still usable.
 	peek = peek[:n]
 
-	kind, target := detect(peek, cfg)
+	kind := classify(peek)
+	target := backendFor(kind)
 	if target == "" {
 		failLog.Logf("nobackend:"+kind, "sslhmux: no %s backend is configured; dropped %s", kind, connlog.IP(conn.RemoteAddr()))
+		conn.Close()
+		return
+	}
+	if pointsAtSelf(target, cfg.Port) {
+		failLog.Logf("self:"+kind, "sslhmux: %s backend %s is this multiplexer's own port; dropped %s", kind, target, connlog.IP(conn.RemoteAddr()))
 		conn.Close()
 		return
 	}
