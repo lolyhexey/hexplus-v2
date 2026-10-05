@@ -270,3 +270,29 @@ func TestMenuPasswordProblem(t *testing.T) {
 		}
 	}
 }
+
+// shadow semantics: an account expiring on day E works through day E-1 and
+// is rejected from 00:00 UTC on day E (hexplus-auth.sh, pam_unix). The menus
+// rounded the remaining hours toward zero, so on day E itself they showed
+// "0 days left" and menu 07 did not remove the account.
+func TestDaysLeftFollowsShadowSemantics(t *testing.T) {
+	expire := time.Date(2026, 10, 10, 0, 0, 0, 0, time.UTC)
+	at := func(day, hour int) time.Time { return time.Date(2026, 10, day, hour, 30, 0, 0, time.UTC) }
+	cases := []struct {
+		now  time.Time
+		want int
+	}{
+		{at(8, 0), 1},
+		{at(8, 23), 1},
+		{at(9, 0), 0},   // last day
+		{at(9, 23), 0},  // still the last day
+		{at(10, 0), -1}, // expiry day: the VPN already refuses
+		{at(10, 12), -1},
+		{at(11, 12), -2},
+	}
+	for _, c := range cases {
+		if got := daysLeft(expire, c.now); got != c.want {
+			t.Errorf("daysLeft(at %s) = %d, want %d", c.now.Format(time.RFC3339), got, c.want)
+		}
+	}
+}
