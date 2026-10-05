@@ -2020,37 +2020,21 @@ func cleanupOpenVPN() {
 // ovpnPort reads the port from /etc/openvpn/server.conf, fallback 1194.
 func ovpnPort() int { return readOpenVPNPort(service.Service{Port: 1194}) }
 
-// ovpnProto reads proto from /etc/openvpn/server.conf, fallback "tcp".
-// Strips the "6" IPv6 suffix (tcp6→tcp, udp6→udp) since most clients
-// only accept the plain form.
+// ovpnProto reads proto from /etc/openvpn/server.conf as plain "tcp" or
+// "udp" (tcp6, tcp-server, udp6 included), which is what clients accept;
+// fallback "tcp".
 func ovpnProto() string {
-	if data, err := os.ReadFile("/etc/openvpn/server.conf"); err == nil {
-		for _, line := range strings.Split(string(data), "\n") {
-			trim := strings.TrimSpace(line)
-			if strings.HasPrefix(trim, "proto ") {
-				fields := strings.Fields(trim)
-				if len(fields) >= 2 {
-					return strings.TrimSuffix(fields[1], "6")
-				}
-			}
-		}
+	// One parser for server.conf (pki.ReadServerListen): tcp6/tcp-server
+	// map to tcp and the last directive wins, as in OpenVPN.
+	if proto, _, err := pki.ReadServerListen(pki.ServerConfPath); err == nil {
+		return proto
 	}
 	return "tcp"
 }
 
 func readOpenVPNPort(svc service.Service) int {
-	if data, err := os.ReadFile("/etc/openvpn/server.conf"); err == nil {
-		for _, line := range strings.Split(string(data), "\n") {
-			trim := strings.TrimSpace(line)
-			if strings.HasPrefix(trim, "port ") {
-				fields := strings.Fields(trim)
-				if len(fields) >= 2 {
-					if p, err := strconv.Atoi(fields[1]); err == nil {
-						return p
-					}
-				}
-			}
-		}
+	if _, port, err := pki.ReadServerListen(pki.ServerConfPath); err == nil {
+		return port
 	}
 	return svc.Port
 }
