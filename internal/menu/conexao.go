@@ -830,16 +830,6 @@ func serviceMenu(r *bufio.Reader, name string) error {
 			if err := changeServicePort(r, svc); err != nil {
 				return err
 			}
-		case "8": // openvpn-only: payload editor
-			if name != "openvpn" || !st.UnitExists {
-				fmt.Println("\n" + cRedBold + "[ผิดพลาด]" + cYelBold + " ตัวเลือกไม่ถูกต้อง" + cReset)
-				waitEnter(r)
-				continue
-			}
-			if err := runPayload(r); err != nil {
-				fmt.Println("\n" + cRedBold + "[ผิดพลาด] " + cYelBold + err.Error() + cReset)
-				waitEnter(r)
-			}
 		case "9": // uninstall
 			res, err := service.UninstallService(svc)
 			if err != nil {
@@ -892,13 +882,6 @@ func paintServiceActions(st service.State, name string) {
 			{"5", "เปิดอัตโนมัติเมื่อบูต"},
 			{"6", "ปิดอัตโนมัติเมื่อบูต"},
 			{"7", "เปลี่ยนพอร์ต"},
-		}
-		// openvpn gets one extra action: rewrite a user's .ovpn with
-		// a carrier-portal `remote` line for HTTP Injector / KPN Tunnel
-		// use. Squid and Dropbear don't ship .ovpn files, so we skip
-		// the option there to keep the grid honest.
-		if name == "openvpn" {
-			actions = append(actions, struct{ idx, label string }{"8", "ปรับแต่ง Payload"})
 		}
 		actions = append(actions, struct{ idx, label string }{"9", "ถอนการติดตั้ง"})
 		for _, a := range actions {
