@@ -146,7 +146,27 @@ func runPayload(r *bufio.Reader) error {
 		return fmt.Errorf("อ่าน %s: %w", srcPath, err)
 	}
 
-	patched, proto, port, err := patchPayload(src, remoteHost, pki.ServerConfPath)
+	// The default is OpenVPN's own endpoint; a client that comes in
+	// through SSLH or SSL TUNNEL needs that service's port instead.
+	defProto, defPort, err := pki.ReadServerListen(pki.ServerConfPath)
+	if err != nil {
+		return fmt.Errorf("อ่าน %s: %w", pki.ServerConfPath, err)
+	}
+	fmt.Println(cWhtBold + "ถ้าลูกค้าเข้าทาง SSLH หรือ SSL TUNNEL ให้ใส่พอร์ตของบริการนั้น และโปรโตคอล tcp" + cReset)
+	portIn, err := promptLineDefault(r, "พอร์ต", strconv.Itoa(defPort))
+	if err != nil {
+		return err
+	}
+	wantPort, err := strconv.Atoi(strings.TrimSpace(portIn))
+	if err != nil {
+		return fmt.Errorf("พอร์ตไม่ถูกต้อง: %q", portIn)
+	}
+	protoIn, err := promptLineDefault(r, "โปรโตคอล (tcp/udp)", defProto)
+	if err != nil {
+		return err
+	}
+
+	patched, proto, port, err := patchPayload(src, remoteHost, pki.ServerConfPath, wantPort, strings.ToLower(strings.TrimSpace(protoIn)))
 	if err != nil {
 		return err
 	}
@@ -167,13 +187,27 @@ func runPayload(r *bufio.Reader) error {
 }
 
 // patchPayload points src's `remote` line at host with the port and proto
-// the server config at confPath listens on. It returns nil bytes when src
+// the server config at confPath listens on, unless the operator gave others
+// (wantPort > 0, wantProto != ""): clients that come in through SSLH or SSL
+// TUNNEL use that service's port, over tcp. It returns nil bytes when src
 // has no `remote` line, and an error (before anything is written) when the
-// server config cannot be read.
-func patchPayload(src []byte, host, confPath string) (patched []byte, proto string, port int, err error) {
+// server config cannot be read or an override is invalid.
+func patchPayload(src []byte, host, confPath string, wantPort int, wantProto string) (patched []byte, proto string, port int, err error) {
 	proto, port, err = pki.ReadServerListen(confPath)
 	if err != nil {
 		return nil, "", 0, fmt.Errorf("อ่าน %s: %w", confPath, err)
+	}
+	if wantPort != 0 {
+		if wantPort < 1 || wantPort > 65535 {
+			return nil, "", 0, fmt.Errorf("พอร์ตไม่ถูกต้อง: %d", wantPort)
+		}
+		port = wantPort
+	}
+	if wantProto != "" {
+		if wantProto != "tcp" && wantProto != "udp" {
+			return nil, "", 0, fmt.Errorf("โปรโตคอลต้องเป็น tcp หรือ udp: %q", wantProto)
+		}
+		proto = wantProto
 	}
 	out, replaced := rewriteRemote(src, host, port, proto)
 	if !replaced {

@@ -32,7 +32,7 @@ func payloadSource(t *testing.T, port int, proto string) []byte {
 // connect.
 func TestPatchPayloadFollowsServerConf(t *testing.T) {
 	src := payloadSource(t, 443, "tcp")
-	out, proto, port, err := patchPayload(src, "portal.ais.co.th", payloadConf(t, "port 443\nproto tcp\n"))
+	out, proto, port, err := patchPayload(src, "portal.ais.co.th", payloadConf(t, "port 443\nproto tcp\n"), 0, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -50,7 +50,7 @@ func TestPatchPayloadFollowsServerConf(t *testing.T) {
 
 func TestPatchPayloadUDPServer(t *testing.T) {
 	src := payloadSource(t, 1194, "udp")
-	out, proto, port, err := patchPayload(src, "portal.ais.co.th", payloadConf(t, "port 1194\nproto udp\n"))
+	out, proto, port, err := patchPayload(src, "portal.ais.co.th", payloadConf(t, "port 1194\nproto udp\n"), 0, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -60,19 +60,40 @@ func TestPatchPayloadUDPServer(t *testing.T) {
 }
 
 func TestPatchPayloadUnreadableConf(t *testing.T) {
-	out, _, _, err := patchPayload(payloadSource(t, 443, "tcp"), "h", filepath.Join(t.TempDir(), "absent.conf"))
+	out, _, _, err := patchPayload(payloadSource(t, 443, "tcp"), "h", filepath.Join(t.TempDir(), "absent.conf"), 0, "")
 	if err == nil || out != nil {
 		t.Fatalf("want an error and no output, got err=%v out=%q", err, out)
 	}
 }
 
 func TestPatchPayloadNoRemoteLine(t *testing.T) {
-	out, _, _, err := patchPayload([]byte(";remote old 1194 udp\nclient\n"), "h", payloadConf(t, "port 443\nproto tcp\n"))
+	out, _, _, err := patchPayload([]byte(";remote old 1194 udp\nclient\n"), "h", payloadConf(t, "port 443\nproto tcp\n"), 0, "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if out != nil {
 		t.Errorf("a source with only a commented remote must report no match, got %q", out)
+	}
+}
+
+// A client that reaches OpenVPN through SSLH or SSL TUNNEL needs that
+// service's port: the payload could only ever write server.conf's.
+func TestPatchPayloadOverride(t *testing.T) {
+	conf := payloadConf(t, "port 1194\nproto udp\n")
+	out, proto, port, err := patchPayload(payloadSource(t, 1194, "udp"), "portal.ais.co.th", conf, 443, "tcp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(out), "remote portal.ais.co.th 443 tcp\n") || port != 443 || proto != "tcp" {
+		t.Errorf("got %s/%d:\n%s", proto, port, out)
+	}
+	for _, bad := range []struct {
+		port  int
+		proto string
+	}{{70000, ""}, {-1, ""}, {0, "tcp-client"}, {0, "sctp"}} {
+		if _, _, _, err := patchPayload(payloadSource(t, 1194, "udp"), "h", conf, bad.port, bad.proto); err == nil {
+			t.Errorf("override %d/%q accepted", bad.port, bad.proto)
+		}
 	}
 }
 
