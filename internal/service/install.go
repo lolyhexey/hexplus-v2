@@ -24,9 +24,8 @@ import (
 
 // InstallResult is what InstallService reports back to the menu.
 type InstallResult struct {
-	Extracted      []string
-	UnitsWritten   []string
-	ConfigsWritten []string
+	Extracted    []string
+	UnitsWritten []string
 }
 
 // UninstallResult mirrors InstallResult for the reverse path.
@@ -35,8 +34,11 @@ type UninstallResult struct {
 }
 
 // InstallService extracts the embedded binary for svc, writes its
-// systemd unit, and bootstraps its default config. Idempotent: every
-// step is a no-op if the target file is already present.
+// systemd unit and the support files it needs. It writes no main config:
+// the caller does (squidInstall writes squid.conf), so a failed caller
+// leaves a service that will not start rather than one running on a
+// generic fallback. Idempotent: every step is a no-op if the target file
+// is already present.
 //
 // The function is the one place that knows about the per-service binary
 // names inside the embed tree, so adding a service is one switch case

@@ -759,9 +759,6 @@ func serviceMenu(r *bufio.Reader, name string) error {
 			for _, p := range res.UnitsWritten {
 				fmt.Println("  + " + p)
 			}
-			for _, p := range res.ConfigsWritten {
-				fmt.Println("  + " + p)
-			}
 
 			// Match HEXPLUS v1 conexao: after install, ask whether to start
 			// immediately + verify with a port-listening check. Default Y
