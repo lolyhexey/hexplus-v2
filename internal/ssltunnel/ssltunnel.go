@@ -15,7 +15,6 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
-	"io"
 	"math/big"
 	"net"
 	"os"
@@ -24,6 +23,7 @@ import (
 	"time"
 
 	"github.com/lolyhexey/hexplus/internal/acceptloop"
+	"github.com/lolyhexey/hexplus/internal/netbridge"
 )
 
 const (
@@ -172,7 +172,7 @@ func GenerateCert() error {
 }
 
 // Run loads the config, opens a TLS listener on cfg.Port, and forwards each
-// accepted connection to cfg.Target via bidirectional io.Copy. It returns nil
+// accepted connection to cfg.Target (see netbridge.Pipe). It returns nil
 // when ctx is cancelled (listener is closed to unblock Accept). Temporary
 // accept errors such as EMFILE are retried; any other accept error is
 // returned.
@@ -222,17 +222,10 @@ func handleConn(src net.Conn, target string) {
 		}
 		cancel()
 	}
-	dst, err := net.Dial("tcp", target)
+	dst, err := netbridge.Dial(target)
 	if err != nil {
 		src.Close()
 		return
 	}
-	bridge(src, dst)
-}
-
-func bridge(src, dst net.Conn) {
-	defer src.Close()
-	defer dst.Close()
-	go io.Copy(dst, src)
-	io.Copy(src, dst)
+	netbridge.Pipe(src, dst)
 }

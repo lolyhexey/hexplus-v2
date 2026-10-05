@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/lolyhexey/hexplus/internal/acceptloop"
+	"github.com/lolyhexey/hexplus/internal/netbridge"
 )
 
 // peekTimeout bounds how long handleMuxConn waits for the first bytes of a
@@ -123,16 +124,6 @@ func detect(peek []byte, cfg Config) string {
 	return cfg.OpenVPN
 }
 
-// bridge copies bidirectionally between src and dst, closing both when done.
-func bridge(src, dst net.Conn) {
-	defer src.Close()
-	defer dst.Close()
-	done := make(chan struct{})
-	go func() { io.Copy(dst, src); close(done) }()
-	io.Copy(src, dst)
-	<-done
-}
-
 // Run loads the config, opens a TCP listener on cfg.Port, peeks the first
 // bytes of each accepted connection, routes to the correct backend, and
 // bridges bidirectionally. Returns nil when ctx is cancelled. Temporary accept
@@ -187,7 +178,7 @@ func handleMuxConn(conn net.Conn, cfg Config) {
 		return
 	}
 
-	dst, err := net.Dial("tcp", target)
+	dst, err := netbridge.Dial(target)
 	if err != nil {
 		conn.Close()
 		return
@@ -198,5 +189,5 @@ func handleMuxConn(conn net.Conn, cfg Config) {
 		Conn: conn,
 		r:    io.MultiReader(bytes.NewReader(peek), conn),
 	}
-	go bridge(pc, dst)
+	netbridge.Pipe(pc, dst)
 }
