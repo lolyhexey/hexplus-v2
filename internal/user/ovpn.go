@@ -12,6 +12,7 @@ import (
 	"bytes"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/lolyhexey/hexplus/internal/pki"
 )
@@ -20,8 +21,38 @@ import (
 type OVPNInput struct {
 	Username   string
 	RemoteHost string
-	RemotePort int    // 0 -> 1194
-	Proto      string // "" -> udp
+	RemotePort int    // 0 -> the port in server.conf (see ResolveEndpoint)
+	Proto      string // "" -> the proto in server.conf (see ResolveEndpoint)
+}
+
+// ResolveEndpoint fills the port and proto the client file will dial. A
+// value the caller set is kept (validated); an unset one is read from the
+// OpenVPN server config at confPath, so the file matches what the server
+// really listens on instead of a fixed 1194/udp. If a value is unset and
+// the config is unreadable it fails, because guessing is how a profile that
+// cannot connect gets handed out.
+func ResolveEndpoint(in OVPNInput, confPath string) (OVPNInput, error) {
+	in.Proto = strings.ToLower(in.Proto)
+	if in.Proto != "" && in.Proto != "udp" && in.Proto != "tcp" {
+		return in, fmt.Errorf("invalid proto %q (want udp or tcp)", in.Proto)
+	}
+	if in.RemotePort < 0 || in.RemotePort > 65535 {
+		return in, fmt.Errorf("invalid remote port %d (want 1-65535)", in.RemotePort)
+	}
+	if in.RemotePort != 0 && in.Proto != "" {
+		return in, nil
+	}
+	proto, port, err := pki.ReadServerListen(confPath)
+	if err != nil {
+		return in, fmt.Errorf("cannot read the server's port/proto (%w); pass --remote-port and --proto", err)
+	}
+	if in.RemotePort == 0 {
+		in.RemotePort = port
+	}
+	if in.Proto == "" {
+		in.Proto = proto
+	}
+	return in, nil
 }
 
 // BuildOVPN reads the on-disk CA, the per-user client cert + key, and

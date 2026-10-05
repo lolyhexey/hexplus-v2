@@ -6,10 +6,14 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/lolyhexey/hexplus/internal/atomicfile"
 )
+
+// ServerConfPath is the primary OpenVPN instance's config.
+const ServerConfPath = OpenVPNDir + "/server.conf"
 
 // AuthScriptPath is where we write the fallback password-auth script.
 const AuthScriptPath = OpenVPNDir + "/hexplus-auth.sh"
@@ -401,4 +405,36 @@ func SetDuplicateCN(path string, on bool) error {
 		kept = append(kept, "duplicate-cn")
 	}
 	return atomicfile.Write(path, []byte(strings.Join(kept, "\n")+"\n"), 0o644)
+}
+
+// ReadServerListen returns the transport protocol ("udp" or "tcp") and the
+// port the OpenVPN config at path listens on, so a client file can be
+// pointed at the endpoint the server really uses. A missing directive keeps
+// OpenVPN's own default (udp, 1194); a later directive overrides an earlier
+// one, as in OpenVPN. Any tcp* proto (tcp-server, tcp6, ...) reports "tcp".
+func ReadServerListen(path string) (proto string, port int, err error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return "", 0, err
+	}
+	proto, port = "udp", 1194
+	for _, l := range strings.Split(string(raw), "\n") {
+		f := strings.Fields(l)
+		if len(f) < 2 {
+			continue
+		}
+		switch f[0] {
+		case "port":
+			if n, err := strconv.Atoi(f[1]); err == nil && n > 0 && n < 65536 {
+				port = n
+			}
+		case "proto":
+			if strings.HasPrefix(f[1], "tcp") {
+				proto = "tcp"
+			} else {
+				proto = "udp"
+			}
+		}
+	}
+	return proto, port, nil
 }
