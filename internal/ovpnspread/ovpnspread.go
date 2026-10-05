@@ -26,7 +26,6 @@ import (
 	"errors"
 	"fmt"
 	"net"
-	"os"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -35,6 +34,7 @@ import (
 	"github.com/lolyhexey/hexplus/internal/firewall"
 	"github.com/lolyhexey/hexplus/internal/ovpninstance"
 	"github.com/lolyhexey/hexplus/internal/paths"
+	"github.com/lolyhexey/hexplus/internal/pki"
 	"github.com/lolyhexey/hexplus/internal/service"
 	"github.com/lolyhexey/hexplus/internal/speedlimit"
 )
@@ -150,30 +150,7 @@ func Workers() ([]ovpninstance.Instance, error) {
 // Primary reads the primary's port and protocol from server.conf, with
 // OpenVPN's own defaults (1194, udp) for a missing directive.
 func Primary() (proto string, port int, err error) {
-	raw, err := os.ReadFile(serverConf)
-	if err != nil {
-		return "", 0, err
-	}
-	proto, port = "udp", 1194
-	for _, l := range strings.Split(string(raw), "\n") {
-		f := strings.Fields(l)
-		if len(f) < 2 {
-			continue
-		}
-		switch f[0] {
-		case "port":
-			if n, err := strconv.Atoi(f[1]); err == nil && n > 0 && n < 65536 {
-				port = n
-			}
-		case "proto":
-			if strings.HasPrefix(f[1], "tcp") {
-				proto = "tcp"
-			} else {
-				proto = "udp"
-			}
-		}
-	}
-	return proto, port, nil
+	return pki.ReadServerListen(serverConf)
 }
 
 // Apply (re)builds the rules from the registry and server.conf, and makes

@@ -311,27 +311,36 @@ func runCreateUser(r *bufio.Reader) error {
 
 	// Generate .ovpn only if PKI is already initialized.
 	ovpnPath := ""
+	var ovpnErr error
 	if pki.IsInitialized() {
 		host2, err2 := readLine(r, "Remote IP ["+host+"]:")
 		if err2 == nil && host2 != "" {
 			host = host2
 		}
-		// User already exists — sign cert then export.
-		if ca, err2 := pki.LoadCA(); err2 == nil {
-			if clientCert, err2 := pki.GenerateClientCert(ca, name); err2 == nil {
-				_ = os.MkdirAll(pki.ClientsDir, 0o700)
-				_ = os.WriteFile(pki.ClientsDir+"/"+name+".crt", clientCert.CertPEM, 0o644)
-				_ = os.WriteFile(pki.ClientsDir+"/"+name+".key", clientCert.KeyPEM, 0o600)
-				if ovpnBytes, err2 := user.Export(name, user.OVPNInput{
-					RemoteHost: host, RemotePort: ovpnPort(), Proto: ovpnProto(),
-				}); err2 == nil {
-					ovpnPath = "/root/" + name + ".ovpn"
-					_ = os.WriteFile(ovpnPath, ovpnBytes, 0o600)
-					// Mirror to /root/openvpn/ for the built-in file server.
-					_ = os.MkdirAll("/root/openvpn", 0o700)
-					_ = os.WriteFile("/root/openvpn/"+name+".ovpn", ovpnBytes, 0o600)
-				}
-			}
+		// User already exists — sign cert then export. A failure here used
+		// to leave the success screen without a .ovpn and no reason.
+		ca, err2 := pki.LoadCA()
+		var clientCert *pki.Cert
+		if err2 == nil {
+			clientCert, err2 = pki.GenerateClientCert(ca, name)
+		}
+		var ovpnBytes []byte
+		if err2 == nil {
+			_ = os.MkdirAll(pki.ClientsDir, 0o700)
+			_ = os.WriteFile(pki.ClientsDir+"/"+name+".crt", clientCert.CertPEM, 0o644)
+			_ = os.WriteFile(pki.ClientsDir+"/"+name+".key", clientCert.KeyPEM, 0o600)
+			ovpnBytes, err2 = user.Export(name, user.OVPNInput{
+				RemoteHost: host, RemotePort: ovpnPort(), Proto: ovpnProto(),
+			})
+		}
+		if err2 == nil {
+			ovpnPath = "/root/" + name + ".ovpn"
+			_ = os.WriteFile(ovpnPath, ovpnBytes, 0o600)
+			// Mirror to /root/openvpn/ for the built-in file server.
+			_ = os.MkdirAll("/root/openvpn", 0o700)
+			_ = os.WriteFile("/root/openvpn/"+name+".ovpn", ovpnBytes, 0o600)
+		} else {
+			ovpnErr = err2
 		}
 	}
 
@@ -351,6 +360,9 @@ func runCreateUser(r *bufio.Reader) error {
 			fmt.Printf("%sดาวน์โหลด: %shttp://%s:82/%s.ovpn%s\n",
 				cGrnBold, cCyanBold, host, name, cReset)
 		}
+	}
+	if ovpnErr != nil {
+		fmt.Printf("%sสร้างไฟล์ .ovpn ไม่สำเร็จ: %s%s\n", cRedBold, ovpnErr.Error(), cReset)
 	}
 	fmt.Println()
 	okLine("เพิ่มผู้ใช้สำเร็จ!")
