@@ -502,6 +502,7 @@ func runRemoveUser(r *bufio.Reader) error {
 			waitEnter(r)
 			return nil
 		}
+		kickOVPN(rec.Name)
 		deleteV1Compat(rec.Name)
 		fmt.Println()
 		fmt.Printf("\033[41;1;37m User %s ลบเรียบร้อย! \033[0m\n", rec.Name)
@@ -524,6 +525,7 @@ func runRemoveUser(r *bufio.Reader) error {
 		}
 		for _, rec := range records {
 			_ = user.Remove(rec.Name)
+			kickOVPN(rec.Name)
 			deleteV1Compat(rec.Name)
 			fmt.Printf("%s- %s%s%s ลบแล้ว\n", cRedBold, cWhtBold, rec.Name, cReset)
 		}
@@ -1033,6 +1035,7 @@ func runCleanExpired(r *bufio.Reader) error {
 			// Kill active sessions before removing (v1: pkill -f $user).
 			// pkill -u removes by UID — safer than matching cmdline.
 			_ = exec.Command("pkill", "-u", rec.Name).Run()
+			kickOVPN(rec.Name)
 			if err := user.Remove(rec.Name); err == nil {
 				deleteV1Compat(rec.Name)
 				allRemoved = append(allRemoved, rec.Name)

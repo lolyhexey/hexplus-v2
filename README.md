@@ -17,6 +17,7 @@ menu
 
 ### จัดการผู้ใช้
 - สร้าง/ลบ SSH user พร้อม password, วันหมดอายุ, และ limit จำนวนอุปกรณ์
+- บังคับ limit จำนวนอุปกรณ์ของ OpenVPN (เมนู OpenVPN → [10], ปิดไว้เป็นค่าเริ่มต้น): service `hexplus-ovpnguard` ตรวจทุก ~15 วินาที ตัดเครื่องที่ต่อนานที่สุดเมื่อเกิน และตัดบัญชีที่ถูกลบ/หมดอายุ (`hexplus ovpnguard run|once|kick <name>`)
 - export `.ovpn` อัตโนมัติเมื่อสร้าง user (อ่าน proto/port จาก server.conf จริง)
 - built-in file server (port 82) เพื่อแจก `.ovpn` ผ่าน HTTP link
 

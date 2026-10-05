@@ -25,6 +25,7 @@ import (
 
 	"github.com/lolyhexey/hexplus/internal/assets"
 	"github.com/lolyhexey/hexplus/internal/firewall"
+	"github.com/lolyhexey/hexplus/internal/ovpnguard"
 	"github.com/lolyhexey/hexplus/internal/ovpninstance"
 	"github.com/lolyhexey/hexplus/internal/pki"
 	"github.com/lolyhexey/hexplus/internal/progress"
@@ -779,6 +780,10 @@ func openvpnMenu(r *bufio.Reader, svc service.Service) error {
 		if ovpnConfContains("duplicate-cn") {
 			multiMark = markerOn()
 		}
+		guardMark := markerOff()
+		if ovpnguard.Enabled() {
+			guardMark = markerOn()
+		}
 		speedMark := markerOff()
 		if limits := speedlimit.LoadAll(); len(limits) > 0 {
 			if mbps := limits[speedlimit.MainKey]; mbps > 0 {
@@ -812,6 +817,7 @@ func openvpnMenu(r *bufio.Reader, svc service.Service) error {
 			instMark = fmt.Sprintf("%s[%s%d%s]%s", cRedBold, cGrnBold, len(insts), cRedBold, cReset)
 		}
 		fmt.Printf("%s[%s9%s] %s• %sพอร์ตเพิ่มเติม %s%s\n", cRedBold, cCyanBold, cRedBold, cWhtBold, cYelBold, instMark, cReset)
+		fmt.Printf("%s[%s10%s] %s• %sจำกัดจำนวนอุปกรณ์ต่อผู้ใช้ %s%s\n", cRedBold, cCyanBold, cRedBold, cWhtBold, cYelBold, guardMark, cReset)
 		fmt.Printf("%s[%s0%s] %s• %sย้อนกลับ%s\n", cRedBold, cCyanBold, cRedBold, cWhtBold, cYelBold, cReset)
 		fmt.Println()
 
@@ -891,6 +897,8 @@ func openvpnMenu(r *bufio.Reader, svc service.Service) error {
 			speedLimitMenu(r, svc)
 		case "9", "09":
 			ovpnInstanceMenu(r)
+		case "10":
+			toggleDeviceLimit(r, svc)
 		default:
 			fmt.Println("\n" + cRedBold + "กรุณาเลือกให้ถูกต้อง..." + cReset)
 			time.Sleep(2 * time.Second)
@@ -1567,7 +1575,16 @@ func openvpnInstall(r *bufio.Reader, svc service.Service) error {
 		}},
 		{Label: pkiLabel, Work: pkiWorkFn},
 		{Label: "เขียน server.conf", Work: func() error {
-			return pki.WriteServerConf(port, proto, dnsChoice, ipLine)
+			if err := pki.WriteServerConf(port, proto, dnsChoice, ipLine); err != nil {
+				return err
+			}
+			// A fresh server.conf from the template has no management
+			// socket; with the device-limit guard on, the main port would
+			// silently go uncounted.
+			if ovpnguard.Enabled() {
+				return ovpnguard.InjectConf("/etc/openvpn/server.conf")
+			}
+			return nil
 		}},
 		{Label: "ตั้งค่าเครือข่าย (IP forward + SNAT)", Work: func() error {
 			netErr = setupNetworking(port, proto)
@@ -1879,6 +1896,12 @@ func cleanupOpenVPN() {
 				break
 			}
 		}
+	}
+
+	// The device-limit guard has nothing left to watch.
+	if ovpnguard.Enabled() {
+		ovpnguard.Teardown()
+		fmt.Println(cYelBold + "  - hexplus-ovpnguard" + cReset)
 	}
 
 	// Read any legacy SNAT --to <IP> lines from rc.local and tear each one
