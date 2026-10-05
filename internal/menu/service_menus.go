@@ -1913,8 +1913,12 @@ func cleanupOpenVPN() {
 
 	// Remove the live MASQUERADE rule, every copy of it: older installs
 	// and reinstalls stacked duplicates, and one -D removes only one.
-	if ovpninstance.DeleteMasquerade("10.8.0.0/16") > 0 {
+	n, err := ovpninstance.DeleteMasquerade("10.8.0.0/16")
+	if n > 0 {
 		fmt.Println(cYelBold + "  - iptables MASQUERADE 10.8.0.0/16" + cReset)
+	}
+	if err != nil {
+		fmt.Println(cRedBold + "  ! ลบ MASQUERADE 10.8.0.0/16 ไม่ครบ: " + err.Error() + cReset)
 	}
 
 	// Remove the FORWARD rules (scoped tun+ rules and the legacy broad

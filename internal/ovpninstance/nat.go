@@ -1,14 +1,28 @@
 package ovpninstance
 
 import (
+	"errors"
 	"fmt"
 	"os/exec"
 	"strings"
 )
 
 // iptablesRun runs iptables and returns its combined output. Tests replace it.
+// -w 5 waits for the xtables lock (Docker hosts hold it often), like the
+// firewall package does.
 var iptablesRun = func(args ...string) ([]byte, error) {
-	return exec.Command("iptables", args...).CombinedOutput()
+	return exec.Command("iptables", append([]string{"-w", "5"}, args...)...).CombinedOutput()
+}
+
+// ruleAbsent reports whether a -C or -D failed because the rule is not
+// there (exit status 1). Anything else, such as the xtables lock (exit 4),
+// is a real failure and must not be read as "absent".
+func ruleAbsent(err error) bool {
+	var ee *exec.ExitError
+	if errors.As(err, &ee) {
+		return ee.ExitCode() == 1
+	}
+	return err != nil && err.Error() == "exit status 1"
 }
 
 // maxMasqueradeCopies bounds DeleteMasquerade, so a rule that cannot be
@@ -23,10 +37,14 @@ func masqueradeSpec(subnet string) []string {
 // already there, so installing again does not stack a second copy.
 func EnsureMasquerade(subnet string) error {
 	spec := masqueradeSpec(subnet)
-	if _, err := iptablesRun(append([]string{"-t", "nat", "-C"}, spec...)...); err == nil {
+	out, err := iptablesRun(append([]string{"-t", "nat", "-C"}, spec...)...)
+	if err == nil {
 		return nil
 	}
-	out, err := iptablesRun(append([]string{"-t", "nat", "-A"}, spec...)...)
+	if !ruleAbsent(err) {
+		return fmt.Errorf("%w %s", err, strings.TrimSpace(string(out)))
+	}
+	out, err = iptablesRun(append([]string{"-t", "nat", "-A"}, spec...)...)
 	if err != nil {
 		return fmt.Errorf("%w %s", err, strings.TrimSpace(string(out)))
 	}
@@ -35,14 +53,18 @@ func EnsureMasquerade(subnet string) error {
 
 // DeleteMasquerade removes every copy of the MASQUERADE rule for subnet (an
 // older release could stack several; one -D removes only one) and returns
-// how many it deleted.
-func DeleteMasquerade(subnet string) int {
+// how many it deleted. A failure other than "no more copies" is returned.
+func DeleteMasquerade(subnet string) (int, error) {
 	spec := masqueradeSpec(subnet)
-	n := 0
-	for ; n < maxMasqueradeCopies; n++ {
-		if _, err := iptablesRun(append([]string{"-t", "nat", "-D"}, spec...)...); err != nil {
-			break
+	for n := 0; n < maxMasqueradeCopies; n++ {
+		out, err := iptablesRun(append([]string{"-t", "nat", "-D"}, spec...)...)
+		if err == nil {
+			continue
 		}
+		if ruleAbsent(err) {
+			return n, nil
+		}
+		return n, fmt.Errorf("%w %s", err, strings.TrimSpace(string(out)))
 	}
-	return n
+	return maxMasqueradeCopies, nil
 }

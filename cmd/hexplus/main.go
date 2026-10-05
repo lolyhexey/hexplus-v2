@@ -5,7 +5,7 @@
 //	(none)         print banner + auto-install if not installed yet
 //	version        print version metadata
 //	install        idempotent install: extract binaries + copy self to /usr/local/bin
-//	uninstall      reverse install (leaves /etc/openvpn etc. alone)
+//	uninstall      reverse install; keeps the primary OpenVPN config, removes extra ports
 //	extract        dev-only: extract embedded assets to --lib-dir without installing
 //	status         report install state + presence of each embedded binary on disk
 //
@@ -106,7 +106,7 @@ Usage:
 
 Subcommands:
   install              extract embedded binaries to %s and copy self to %s
-  uninstall            remove what 'install' put down (configs under /etc preserved)
+  uninstall            remove what 'install' put down (primary configs kept; extra OpenVPN ports removed)
   status               show whether install has been run and which binaries are present
   service <verb> [name]  start/stop/restart/enable/disable/status one or all services
                          (services: openvpn, squid, dropbear)
@@ -170,7 +170,7 @@ func runUninstall() {
 		fmt.Fprintln(os.Stderr, "uninstall:", err)
 		os.Exit(1)
 	}
-	fmt.Println("hexplus uninstalled (state under /etc and /var/lib preserved).")
+	fmt.Println("hexplus uninstalled (primary configs under /etc and /var/lib kept; extra OpenVPN ports and CPU spreading removed).")
 }
 
 func runStatus() {

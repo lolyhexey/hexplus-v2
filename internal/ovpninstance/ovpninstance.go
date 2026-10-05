@@ -179,10 +179,9 @@ func add(port int, proto string, dnsPush []string, worker bool) (Instance, error
 	inst := Instance{ID: nextID(list), Port: port, Proto: proto, Worker: worker}
 
 	// A cap left under this ID by an instance removed before Remove cleared
-	// it (or by hand) would otherwise apply to the new port.
-	if err := speedlimit.Forget(strconv.Itoa(inst.ID)); err != nil {
-		return Instance{}, err
-	}
+	// it (or by hand) would otherwise apply to the new port. Best effort: a
+	// shaper file that cannot be rewritten must not block adding a port.
+	_ = speedlimit.Forget(strconv.Itoa(inst.ID))
 	if err := pki.WriteInstanceConf(inst.ID, port, proto, dnsPush); err != nil {
 		return Instance{}, err
 	}
@@ -301,7 +300,7 @@ func setupInstanceNAT(inst Instance) {
 }
 
 func removeInstanceNAT(inst Instance) {
-	DeleteMasquerade(inst.Subnet())
+	_, _ = DeleteMasquerade(inst.Subnet()) // best effort, like the rest of Remove
 	unpersistRCLocal("iptables -t nat -A POSTROUTING -s " + inst.Subnet() + " -j MASQUERADE")
 	firewall.RemoveInput(inst.Proto, inst.Port)
 	unpersistRCLocal(firewall.InputRCLocalLine(inst.Proto, inst.Port))
