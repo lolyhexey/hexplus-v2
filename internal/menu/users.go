@@ -920,8 +920,10 @@ func runChangeExpiry(r *bufio.Reader) error {
 			waitEnter(r)
 			return nil
 		}
-		days = int(time.Until(t).Hours() / 24)
-		if days < 0 {
+		// The account then stops working on that date (shadow semantics);
+		// days < 1 would mean "never expires" to UpdateExpiry.
+		days = int(utcDay(t) - utcDay(time.Now()))
+		if days < 1 {
 			errLine("วันที่ที่ระบุผ่านมาแล้ว — ใส่วันที่ในอนาคต")
 			waitEnter(r)
 			return nil
@@ -1169,7 +1171,7 @@ func runListUsers(r *bufio.Reader) error {
 
 // chageExpiry returns (dateStr, daysLeft) for a user.
 // dateStr is "never" if no expiry is set, or "YYYY-MM-DD" otherwise.
-// daysLeft < 0 means already expired.
+// daysLeft < 0 means already expired, 0 means today is the last day.
 func chageExpiry(name string) (string, int) {
 	out, err := exec.Command("chage", "-l", name).Output()
 	if err != nil {
@@ -1194,8 +1196,7 @@ func chageExpiry(name string) (string, int) {
 		if err != nil {
 			return val, 0
 		}
-		days := int(time.Until(t).Hours() / 24)
-		return t.Format("02/01/2006"), days
+		return t.Format("02/01/2006"), daysLeft(t, time.Now())
 	}
 	return "never", 0
 }
@@ -1214,4 +1215,18 @@ func menuPasswordProblem(pw string) string {
 		return "รหัสผ่านไม่ถูกต้อง: มีอักขระที่ใช้ไม่ได้"
 	}
 	return ""
+}
+
+// utcDay is t as days since 1970-01-01 in UTC, the unit of the expiry field
+// in /etc/shadow.
+func utcDay(t time.Time) int64 { return t.Unix() / 86400 }
+
+// daysLeft returns the full days an account expiring on expire (a shadow
+// expiry date, 00:00 UTC) still has after today: 0 on its last day, -1 from
+// the expiry date on. The auth script and pam_unix reject the account once
+// today reaches the expiry day; rounding the remaining hours toward zero
+// showed that day as "0 days left" and kept the user out of the
+// expired-user cleanup.
+func daysLeft(expire, now time.Time) int {
+	return int(utcDay(expire) - utcDay(now) - 1)
 }
