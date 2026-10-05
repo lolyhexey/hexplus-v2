@@ -13,12 +13,14 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"os"
 	"path/filepath"
 	"time"
 
 	"github.com/lolyhexey/hexplus/internal/acceptloop"
+	"github.com/lolyhexey/hexplus/internal/connlog"
 	"github.com/lolyhexey/hexplus/internal/netbridge"
 )
 
@@ -99,16 +101,18 @@ type peekedConn struct {
 
 func (c *peekedConn) Read(b []byte) (int, error) { return c.r.Read(b) }
 
-// detect returns the backend address based on the first bytes of the connection.
-// Match order: SSH → TLS → HTTP → OpenVPN (fallback).
-func detect(peek []byte, cfg Config) string {
+// detect returns the protocol name and backend address for the first bytes of
+// the connection. Match order: SSH → TLS → HTTP → OpenVPN (fallback). The
+// fallback kind is "other/openvpn" because every unrecognised protocol, port
+// scanners included, is sent to OpenVPN.
+func detect(peek []byte, cfg Config) (kind, target string) {
 	// SSH: starts with "SSH-"
 	if len(peek) >= 4 && string(peek[:4]) == "SSH-" {
-		return cfg.SSH
+		return "ssh", cfg.SSH
 	}
 	// TLS ClientHello: first byte 0x16 (content type handshake), second 0x03
 	if len(peek) >= 2 && peek[0] == 0x16 && peek[1] == 0x03 {
-		return cfg.SSL
+		return "ssl", cfg.SSL
 	}
 	// HTTP methods (4-byte prefix match)
 	httpPrefixes := [][]byte{
@@ -117,12 +121,18 @@ func detect(peek []byte, cfg Config) string {
 	}
 	for _, p := range httpPrefixes {
 		if bytes.HasPrefix(peek, p) {
-			return cfg.HTTP
+			return "http", cfg.HTTP
 		}
 	}
 	// Anything else (OpenVPN, etc.)
-	return cfg.OpenVPN
+	return "other/openvpn", cfg.OpenVPN
 }
+
+// failLog carries the lines an operator has to act on. Successful sessions
+// and empty connects (port scans, health checks) are deliberately not logged,
+// and repeats are folded: the port faces the Internet and the menu shows only
+// the last 50 journal lines.
+var failLog = connlog.New(5*time.Minute, log.Printf)
 
 // Run loads the config, opens a TCP listener on cfg.Port, peeks the first
 // bytes of each accepted connection, routes to the correct backend, and
@@ -142,6 +152,8 @@ func Run(ctx context.Context) error {
 		return fmt.Errorf("listen :%d: %w", cfg.Port, err)
 	}
 
+	log.Printf("sslhmux: listening on :%d ssh=%s ssl=%s http=%s openvpn=%s", cfg.Port, cfg.SSH, cfg.SSL, cfg.HTTP, cfg.OpenVPN)
+
 	go func() {
 		<-ctx.Done()
 		ln.Close()
@@ -153,7 +165,8 @@ func Run(ctx context.Context) error {
 }
 
 // handleMuxConn peeks up to 8 bytes, detects the protocol, dials the backend,
-// and bridges the connection. Silently closes on any error.
+// and bridges the connection. Connections that send nothing are closed
+// silently; a missing or unreachable backend is logged (throttled).
 func handleMuxConn(conn net.Conn, cfg Config) {
 	_ = conn.SetReadDeadline(time.Now().Add(peekTimeout))
 	peek := make([]byte, 8)
@@ -172,14 +185,16 @@ func handleMuxConn(conn net.Conn, cfg Config) {
 	_ = err // err is non-nil on short read or deadline; bytes we have are still usable.
 	peek = peek[:n]
 
-	target := detect(peek, cfg)
+	kind, target := detect(peek, cfg)
 	if target == "" {
+		failLog.Logf("nobackend:"+kind, "sslhmux: no %s backend is configured; dropped %s", kind, connlog.IP(conn.RemoteAddr()))
 		conn.Close()
 		return
 	}
 
 	dst, err := netbridge.Dial(target)
 	if err != nil {
+		failLog.Logf("dial:"+kind+":"+target, "sslhmux: %s backend %s unreachable: %v (client %s)", kind, target, err, connlog.IP(conn.RemoteAddr()))
 		conn.Close()
 		return
 	}
