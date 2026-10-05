@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/lolyhexey/hexplus/internal/ovpninstance"
+	"github.com/lolyhexey/hexplus/internal/pki"
 	"github.com/lolyhexey/hexplus/internal/proxy"
 	"github.com/lolyhexey/hexplus/internal/service"
 	"github.com/lolyhexey/hexplus/internal/ssltunnel"
@@ -117,3 +118,35 @@ func followOpenVPNPort(oldPort, newPort int) {
 		fmt.Println(cGrnBold + "ปรับปลายทาง PROXY " + c.Name + " เป็น " + c.DefaultHost + cReset)
 	}
 }
+
+// sslTunnelTargetWarning returns a warning when SSL TUNNEL forwards to a
+// local port nothing listens on, e.g. a target left on OpenVPN's old port
+// by a release that did not follow port changes. It suggests OpenVPN's
+// port when OpenVPN listens on TCP elsewhere; it never changes the target
+// itself, which may point at SSH or anything else on purpose.
+func sslTunnelTargetWarning(target string) string {
+	host, portStr, err := net.SplitHostPort(target)
+	if err != nil {
+		return ""
+	}
+	if ip := net.ParseIP(host); host != "localhost" && (ip == nil || !(ip.IsLoopback() || ip.IsUnspecified())) {
+		return "" // a remote target cannot be checked from here
+	}
+	port, err := strconv.Atoi(portStr)
+	if err != nil {
+		return ""
+	}
+	if ok, err := listenStatus(port, "tcp"); err != nil || ok {
+		return ""
+	}
+	msg := fmt.Sprintf("คำเตือน: ไม่มีบริการฟังอยู่ที่ปลายทาง %s", target)
+	if proto, p, err := pki.ReadServerListen(pki.ServerConfPath); err == nil && proto == "tcp" && p != port {
+		if ok, _ := listenStatus(p, "tcp"); ok {
+			msg += fmt.Sprintf(" — OPENVPN อยู่ที่ 127.0.0.1:%d (แก้ได้ที่ [5])", p)
+		}
+	}
+	return msg
+}
+
+// listenStatus is service.ListenStatus; tests replace it.
+var listenStatus = service.ListenStatus

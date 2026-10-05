@@ -76,9 +76,13 @@ func sslTunnelMenu(r *bufio.Reader) error {
 			}
 		} else {
 			paintTitleBar("              จัดการ SSL TUNNEL               ")
-			fmt.Printf("\n%sพอร์ต%s: %s%d%s  →  %s%s%s\n\n",
+			fmt.Printf("\n%sพอร์ต%s: %s%d%s  →  %s%s%s\n",
 				cYelBold, cWhtBold, cGrnBold, cfg.Port, cReset,
 				cCyanBold, cfg.Target, cReset)
+			if warn := sslTunnelTargetWarning(cfg.Target); warn != "" {
+				fmt.Println(cRedBold + warn + cReset)
+			}
+			fmt.Println()
 			paintOptions([][2]string{
 				{"1", "เปลี่ยนพอร์ต SSL TUNNEL"},
 				{"2", "ลบ SSL TUNNEL"},

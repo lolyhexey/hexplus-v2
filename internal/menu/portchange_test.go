@@ -73,3 +73,19 @@ func TestPortChangeConflictIsPerProtocol(t *testing.T) {
 		t.Error("tcp listener not seen")
 	}
 }
+
+func TestSSLTunnelTargetWarning(t *testing.T) {
+	old := listenStatus
+	t.Cleanup(func() { listenStatus = old })
+	listening := map[int]bool{22: true}
+	listenStatus = func(port int, _ string) (bool, error) { return listening[port], nil }
+
+	if w := sslTunnelTargetWarning("127.0.0.1:1194"); !strings.Contains(w, "127.0.0.1:1194") {
+		t.Errorf("no warning for a dead local target: %q", w)
+	}
+	for _, target := range []string{"127.0.0.1:22", "10.0.0.5:1194", "garbage", ""} {
+		if w := sslTunnelTargetWarning(target); w != "" {
+			t.Errorf("warning for %q: %q", target, w)
+		}
+	}
+}
