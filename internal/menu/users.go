@@ -657,17 +657,18 @@ func readSSHTimes() map[string]string {
 // readOpenVPNTimes returns a map[user]elapsed parsed from "Connected Since"
 // in the status log. Handles status-version 2/3 (what serverconf.go writes)
 // via the epoch field, and status-version 1 for installs whose server.conf
-// predates that directive.
+// predates that directive. Every instance's log is read, as readOpenVPNUsers
+// does: users on extra ports and CPU-spread workers have a time too.
 func readOpenVPNTimes() map[string]string {
 	out := map[string]string{}
 	var data []byte
-	for _, p := range []string{
-		"/var/log/openvpn-status.log",
-		"/etc/openvpn/openvpn-status.log",
-	} {
+	paths, _ := filepath.Glob("/var/log/openvpn-status*.log")
+	if len(paths) == 0 {
+		paths = []string{"/etc/openvpn/openvpn-status.log"} // pre-v2 installs
+	}
+	for _, p := range paths {
 		if d, err := os.ReadFile(p); err == nil {
-			data = d
-			break
+			data = append(append(data, d...), '\n')
 		}
 	}
 	if data == nil {

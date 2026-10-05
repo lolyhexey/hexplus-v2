@@ -34,11 +34,40 @@ import (
 // RegistryPath persists the instance list as JSON.
 const RegistryPath = "/etc/openvpn/hexplus-instances.json"
 
+// PrimaryUnit is the primary OpenVPN's unit (service.ByName("openvpn")).
+const PrimaryUnit = "hexplus-openvpn.service"
+
 // Instance describes one extra OpenVPN daemon.
 type Instance struct {
 	ID    int    `json:"id"`    // ≥ 2; primary instance is implicitly 1
 	Port  int    `json:"port"`  //
 	Proto string `json:"proto"` // "tcp" or "udp"
+	// Worker marks an instance created by the CPU-spreading feature
+	// (internal/ovpnspread): it takes a share of the primary port's new
+	// connections through iptables REDIRECT and is not reachable directly.
+	Worker bool `json:"worker,omitempty"`
+}
+
+// Extras returns the operator's extra ports: list without spread workers.
+func Extras(list []Instance) []Instance {
+	var out []Instance
+	for _, i := range list {
+		if !i.Worker {
+			out = append(out, i)
+		}
+	}
+	return out
+}
+
+// Workers returns the spread workers in list.
+func Workers(list []Instance) []Instance {
+	var out []Instance
+	for _, i := range list {
+		if i.Worker {
+			out = append(out, i)
+		}
+	}
+	return out
 }
 
 // UnitName returns the systemd unit for this instance.
@@ -53,7 +82,15 @@ func (i Instance) Subnet() string { return fmt.Sprintf("10.%d.0.0/16", 8+i.ID-1)
 // svc builds the service.Service descriptor used for unit generation and
 // start/stop/status calls.
 func (i Instance) svc() service.Service {
+	var partOf []string
+	if i.Worker {
+		// A worker is part of the primary: stopping or restarting OpenVPN
+		// from any menu or CLI path must take the workers along, or they
+		// keep serving the share of the port they are redirected.
+		partOf = []string{PrimaryUnit}
+	}
 	return service.Service{
+		PartOf:      partOf,
 		Name:        fmt.Sprintf("openvpn%d", i.ID),
 		DisplayName: fmt.Sprintf("HEXPLUS OpenVPN server #%d (port %d/%s)", i.ID, i.Port, i.Proto),
 		UnitName:    i.UnitName(),
@@ -120,6 +157,18 @@ func nextID(list []Instance) int {
 // It does NOT start the unit — the caller drives that through a progress
 // step so failures surface in the UI.
 func Add(port int, proto string, dnsPush []string) (Instance, error) {
+	return add(port, proto, dnsPush, false)
+}
+
+// AddWorker creates a spread worker (see Instance.Worker). Unlike Add it
+// opens no public INPUT rule (ovpnspread admits only redirected traffic),
+// and it copies the primary's MULTILOGIN setting (duplicate-cn) instead of
+// always allowing several sessions per user.
+func AddWorker(port int, proto string, dnsPush []string) (Instance, error) {
+	return add(port, proto, dnsPush, true)
+}
+
+func add(port int, proto string, dnsPush []string, worker bool) (Instance, error) {
 	if proto != "tcp" && proto != "udp" {
 		return Instance{}, fmt.Errorf("proto ต้องเป็น tcp หรือ udp")
 	}
@@ -127,10 +176,15 @@ func Add(port int, proto string, dnsPush []string) (Instance, error) {
 	if err != nil {
 		return Instance{}, err
 	}
-	inst := Instance{ID: nextID(list), Port: port, Proto: proto}
+	inst := Instance{ID: nextID(list), Port: port, Proto: proto, Worker: worker}
 
 	if err := pki.WriteInstanceConf(inst.ID, port, proto, dnsPush); err != nil {
 		return Instance{}, err
+	}
+	if worker {
+		if err := pki.SetDuplicateCN(inst.ConfPath(), pki.HasDuplicateCN(pki.OpenVPNDir+"/server.conf")); err != nil {
+			return Instance{}, err
+		}
 	}
 	// With the device-limit guard on, the new port needs its management
 	// socket too, or its sessions would not be counted.
@@ -210,7 +264,11 @@ func setupInstanceNAT(inst Instance) {
 
 	// The instance's own port, like the primary's: extra instances never
 	// opened it, so on a host whose INPUT policy is DROP they were
-	// unreachable.
+	// unreachable. A worker's port stays closed: ovpnspread admits only
+	// the connections it redirects there.
+	if inst.Worker {
+		return
+	}
 	if firewall.ApplyInput(inst.Proto, inst.Port) == nil {
 		persistRCLocal(firewall.InputRCLocalLine(inst.Proto, inst.Port))
 	}

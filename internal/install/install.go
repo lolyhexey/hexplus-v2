@@ -28,6 +28,7 @@ import (
 	"path/filepath"
 
 	"github.com/lolyhexey/hexplus/internal/ovpnguard"
+	"github.com/lolyhexey/hexplus/internal/ovpnspread"
 	"github.com/lolyhexey/hexplus/internal/paths"
 	"github.com/lolyhexey/hexplus/internal/service"
 	"github.com/lolyhexey/hexplus/internal/speedlimit"
@@ -129,6 +130,10 @@ func Uninstall() error {
 	// when the operator switched it on. Left behind it would keep restarting
 	// a binary that is about to be deleted.
 	ovpnguard.Teardown()
+	// The CPU-spreading rules call the binary from rc.local and redirect
+	// the OpenVPN port, and the workers run the OpenVPN binary about to be
+	// deleted; none of them may outlive hexplus.
+	_ = ovpnspread.Disable(func(string, ...any) {})
 
 	// Remove the menu shortcut first — but only if it's actually our symlink
 	// pointing at SelfPath. We don't want to clobber an operator's own /menu

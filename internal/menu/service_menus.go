@@ -27,6 +27,7 @@ import (
 	"github.com/lolyhexey/hexplus/internal/firewall"
 	"github.com/lolyhexey/hexplus/internal/ovpnguard"
 	"github.com/lolyhexey/hexplus/internal/ovpninstance"
+	"github.com/lolyhexey/hexplus/internal/ovpnspread"
 	"github.com/lolyhexey/hexplus/internal/pki"
 	"github.com/lolyhexey/hexplus/internal/progress"
 	"github.com/lolyhexey/hexplus/internal/service"
@@ -795,7 +796,7 @@ func openvpnMenu(r *bufio.Reader, svc service.Service) error {
 
 		paintTitleBar("          จัดการ OPENVPN           ")
 		portLine := fmt.Sprintf("%d/%s", port, ovpnProto())
-		if insts, _ := ovpninstance.List(); len(insts) > 0 {
+		if insts := listExtraInstances(); len(insts) > 0 {
 			for _, inst := range insts {
 				portLine += fmt.Sprintf("%s, %s%d/%s", cWhtBold, cGrnBold, inst.Port, inst.Proto)
 			}
@@ -813,11 +814,12 @@ func openvpnMenu(r *bufio.Reader, svc service.Service) error {
 		fmt.Printf("%s[%s7%s] %s• %sดู log OPENVPN%s\n", cRedBold, cCyanBold, cRedBold, cWhtBold, cYelBold, cReset)
 		fmt.Printf("%s[%s8%s] %s• %sจำกัดความเร็ว %s%s\n", cRedBold, cCyanBold, cRedBold, cWhtBold, cYelBold, speedMark, cReset)
 		instMark := ""
-		if insts, _ := ovpninstance.List(); len(insts) > 0 {
+		if insts := listExtraInstances(); len(insts) > 0 {
 			instMark = fmt.Sprintf("%s[%s%d%s]%s", cRedBold, cGrnBold, len(insts), cRedBold, cReset)
 		}
 		fmt.Printf("%s[%s9%s] %s• %sพอร์ตเพิ่มเติม %s%s\n", cRedBold, cCyanBold, cRedBold, cWhtBold, cYelBold, instMark, cReset)
 		fmt.Printf("%s[%s10%s] %s• %sจำกัดจำนวนอุปกรณ์ต่อผู้ใช้ %s%s\n", cRedBold, cCyanBold, cRedBold, cWhtBold, cYelBold, guardMark, cReset)
+		fmt.Printf("%s[%s11%s] %s• %sกระจายโหลดทุก CPU %s%s\n", cRedBold, cCyanBold, cRedBold, cWhtBold, cYelBold, spreadMark(), cReset)
 		fmt.Printf("%s[%s0%s] %s• %sย้อนกลับ%s\n", cRedBold, cCyanBold, cRedBold, cWhtBold, cYelBold, cReset)
 		fmt.Println()
 
@@ -855,7 +857,12 @@ func openvpnMenu(r *bufio.Reader, svc service.Service) error {
 					// Tear extra instances down BEFORE /etc/openvpn is
 					// removed — Remove() needs the registry that lives there,
 					// and leaving units running against deleted configs would
-					// orphan them until reboot.
+					// orphan them until reboot. The spreading rules go
+					// first so nothing is redirected to a removed worker;
+					// if they cannot be removed, stop here.
+					if err := ovpnspread.Teardown(); err != nil {
+						return err
+					}
 					insts, _ := ovpninstance.List()
 					for _, inst := range insts {
 						_ = ovpninstance.Remove(inst.ID)
@@ -905,6 +912,8 @@ func openvpnMenu(r *bufio.Reader, svc service.Service) error {
 			ovpnInstanceMenu(r)
 		case "10":
 			toggleDeviceLimit(r, svc)
+		case "11":
+			toggleSpread(r)
 		default:
 			fmt.Println("\n" + cRedBold + "กรุณาเลือกให้ถูกต้อง..." + cReset)
 			time.Sleep(2 * time.Second)
@@ -920,7 +929,7 @@ func speedLimitMenu(r *bufio.Reader, svc service.Service) {
 		clearScreen()
 		paintTitleBar("       จำกัดความเร็วต่อ session      ")
 		limits := speedlimit.LoadAll()
-		insts, _ := ovpninstance.List()
+		insts := listExtraInstances() // spread workers follow the primary's limit
 
 		// One selectable row per port: index 1 = primary, 2.. = instances.
 		type speedPort struct {
@@ -997,6 +1006,11 @@ func speedLimitMenu(r *bufio.Reader, svc service.Service) {
 				fmt.Println()
 				_ = progress.Run([]progress.Step{
 					{Label: "ปิดการจำกัด + รีสตาร์ท " + p.label, Work: func() error {
+						if p.key == speedlimit.MainKey {
+							if _, err := ovpnspread.SyncSpeedLimit(); err != nil {
+								return err
+							}
+						}
 						return service.Restart(p.target)
 					}},
 				})
@@ -1026,12 +1040,14 @@ func ovpnInstanceMenu(r *bufio.Reader) {
 	for {
 		clearScreen()
 		paintTitleBar("       พอร์ตเพิ่มเติม OPENVPN        ")
-		insts, err := ovpninstance.List()
+		all, err := ovpninstance.List()
 		if err != nil {
 			fmt.Println("\n" + cRedBold + "[ผิดพลาด] " + cYelBold + err.Error() + cReset)
 			waitEnter(r)
 			return
 		}
+		// Spread workers are managed from [11], not here.
+		insts := ovpninstance.Extras(all)
 
 		fmt.Printf("\n%sพอร์ตหลัก%s : %s%d/%s%s\n\n", cYelBold, cWhtBold, cGrnBold,
 			ovpnPort(), ovpnProto(), cReset)
@@ -1237,9 +1253,21 @@ func speedLimitSetKey(r *bufio.Reader, key string, target service.Service) error
 	}
 	fmt.Println()
 	if err := progress.Run([]progress.Step{
-		{Label: label, Work: func() error { return service.Restart(target) }},
+		{Label: label, Work: func() error {
+			// Spread workers take the primary's limit before the restart,
+			// which takes them along (PartOf).
+			if key == speedlimit.MainKey {
+				if _, err := ovpnspread.SyncSpeedLimit(); err != nil {
+					return err
+				}
+			}
+			return service.Restart(target)
+		}},
 	}); err != nil {
 		_ = speedlimit.SetLimit(key, prev)
+		if key == speedlimit.MainKey {
+			_, _ = ovpnspread.SyncSpeedLimit()
+		}
 		return err
 	}
 	fmt.Println("\n" + cGrnBold + "ตั้งค่าเรียบร้อย" + cReset)
@@ -1327,8 +1355,13 @@ func toggleMultilogin(r *bufio.Reader, svc service.Service) {
 			}
 			_ = os.WriteFile("/etc/openvpn/server.conf", []byte(strings.Join(lines, "\n")), 0o644)
 		}
+		setSpreadMultilogin(false)
 		service.Restart(svc)
 		fmt.Println("Ok" + cReset)
+		if ovpnspread.Enabled() && !ovpnguard.Enabled() {
+			fmt.Println(cYelBold + "หมายเหตุ: กระจายโหลดเปิดอยู่ แต่ละ process กันการต่อซ้ำได้เฉพาะในตัวเอง" + cReset)
+			fmt.Println(cYelBold + "เปิด [10] จำกัดจำนวนอุปกรณ์ต่อผู้ใช้ เพื่อจำกัด 1 เครื่องรวมทุก process" + cReset)
+		}
 	} else {
 		// Currently OFF → turn on (allow multilogin).
 		paintTitleBar("         MULTILOGIN OVPN (อนุญาต)      ")
@@ -1341,6 +1374,7 @@ func toggleMultilogin(r *bufio.Reader, svc service.Service) {
 				_ = os.WriteFile("/etc/openvpn/server.conf", []byte(conf), 0o644)
 			}
 		}
+		setSpreadMultilogin(true)
 		service.Restart(svc)
 		fmt.Println("Ok" + cReset)
 	}

@@ -48,6 +48,10 @@ type Service struct {
 	// AllowHome disables ProtectHome=true in the unit — needed for services
 	// that must read from /root/.
 	AllowHome bool
+
+	// PartOf lists units whose stop and restart this unit follows
+	// ([Unit] PartOf=).
+	PartOf []string
 }
 
 // OVPNDir is the directory served by the built-in file server.

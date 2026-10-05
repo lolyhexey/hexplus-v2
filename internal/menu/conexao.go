@@ -26,7 +26,7 @@ import (
 	"time"
 
 	"github.com/lolyhexey/hexplus/internal/firewall"
-	"github.com/lolyhexey/hexplus/internal/ovpninstance"
+	"github.com/lolyhexey/hexplus/internal/ovpnspread"
 	"github.com/lolyhexey/hexplus/internal/panel"
 	"github.com/lolyhexey/hexplus/internal/proxy"
 	"github.com/lolyhexey/hexplus/internal/service"
@@ -128,8 +128,9 @@ func paintConexaoHeader() {
 		}
 		portStr := strconv.Itoa(port)
 		if pair.key == "openvpn" {
-			// Append every extra-instance port that's actively running.
-			insts, _ := ovpninstance.List()
+			// Append every extra-instance port that's actively running
+			// (spread workers listen on internal ports: not shown).
+			insts := listExtraInstances()
 			for _, inst := range insts {
 				if ist, _ := service.Status(inst.Service()); ist.ActiveState == "active" {
 					portStr += " " + strconv.Itoa(inst.Port)
@@ -957,6 +958,12 @@ func changeServicePort(r *bufio.Reader, svc service.Service) error {
 		// policy is DROP never lets clients reach the new one.
 		if err := firewall.MoveInput(ovpnProto(), currentPort, newPort, firewall.RCLocalPath); err != nil {
 			fmt.Println("\n" + cYelBold + "คำเตือน: ย้ายกฎ INPUT ไปพอร์ตใหม่ไม่สำเร็จ ลูกค้าอาจต่อพอร์ตใหม่ไม่ได้: " + err.Error() + cReset)
+		}
+		// The spreading rules match the primary port.
+		if ovpnspread.Enabled() {
+			if err := ovpnspread.Apply(); err != nil {
+				fmt.Println("\n" + cYelBold + "คำเตือน: ย้ายกฎกระจายโหลดไปพอร์ตใหม่ไม่สำเร็จ: " + err.Error() + cReset)
+			}
 		}
 	case "squid":
 		if err := rewriteConfPort("/etc/squid/squid.conf", `(?m)^\s*http_port\s+\d+\b`, fmt.Sprintf("http_port %d", newPort)); err != nil {
