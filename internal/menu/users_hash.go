@@ -60,16 +60,15 @@ func repairUnverifiableHashes(names []string) (fixed, noStored []string, failed 
 		fixed = append(fixed, name)
 	}
 
-	// Do not report success on faith: chpasswd can still write a hash the
-	// script rejects (e.g. login.defs sets SHA_CRYPT_*_ROUNDS, giving
-	// "$6$rounds=N$..."). If /etc/shadow cannot be read, nothing is claimed
-	// beyond "password re-applied".
+	// Do not report success on faith: re-read the hash chpasswd wrote and
+	// check that the script can verify it. If /etc/shadow cannot be read,
+	// nothing is claimed beyond "password re-applied".
 	if len(fixed) > 0 {
 		if still, err := readUnverifiable(fixed); err == nil && len(still) > 0 {
 			stillBad := map[string]bool{}
 			for _, n := range still {
 				stillBad[n] = true
-				failed[n] = errors.New("ตั้งรหัสผ่านใหม่แล้วแต่ hash ยังใช้ login OpenVPN ไม่ได้ (ตรวจ SHA_CRYPT_*_ROUNDS ใน /etc/login.defs)")
+				failed[n] = errors.New("ตั้งรหัสผ่านใหม่แล้วแต่ hash ยังใช้ login OpenVPN ไม่ได้ (ตรวจ ENCRYPT_METHOD ใน /etc/login.defs)")
 			}
 			kept := fixed[:0]
 			for _, n := range fixed {

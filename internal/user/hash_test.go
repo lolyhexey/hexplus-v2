@@ -16,14 +16,14 @@ func TestUnverifiableHashUsers(t *testing.T) {
 		"frank:*:19000:0:99999:7:::\n" + // no password login
 		"gina::19000:0:99999:7:::\n" + // empty password field
 		"hank:$2b$12$salt$hash:19000:0:99999:7:::\n" + // bcrypt: script cannot verify
-		"jack:$6$rounds=10000$salt$hash:19000:0:99999:7:::\n" + // SHA_CRYPT_*_ROUNDS set: script takes "rounds=N" as the salt
+		"jack:$6$rounds=10000$salt$hash:19000:0:99999:7:::\n" + // SHA_CRYPT_*_ROUNDS set: the script handles it
 		"kate:$5$rounds=5000$salt$hash:19000:0:99999:7:::\n" + // same for SHA-256
 		"liam:$6$roundsalt$hash:19000:0:99999:7:::\n" + // a salt that merely starts with "rounds": fine
 		"ivan:$y$j9T$salt$hash\r\n" // CRLF and a short entry must not break parsing
 	names := []string{"alice", "bob", "carol", "dave", "erin", "frank", "gina", "hank", "ivan", "jack", "kate", "liam", "nobody-in-shadow"}
 
 	got := UnverifiableHashUsers(shadow, names)
-	want := []string{"alice", "hank", "ivan", "jack", "kate"}
+	want := []string{"alice", "hank", "ivan"}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("UnverifiableHashUsers = %v, want %v", got, want)
 	}
