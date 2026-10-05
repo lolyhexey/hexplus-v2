@@ -20,9 +20,11 @@ import (
 	"os"
 	"os/exec"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/lolyhexey/hexplus/internal/firewall"
+	"github.com/lolyhexey/hexplus/internal/ovpnguard"
 	"github.com/lolyhexey/hexplus/internal/paths"
 	"github.com/lolyhexey/hexplus/internal/pki"
 	"github.com/lolyhexey/hexplus/internal/service"
@@ -129,6 +131,13 @@ func Add(port int, proto string, dnsPush []string) (Instance, error) {
 	if err := pki.WriteInstanceConf(inst.ID, port, proto, dnsPush); err != nil {
 		return Instance{}, err
 	}
+	// With the device-limit guard on, the new port needs its management
+	// socket too, or its sessions would not be counted.
+	if ovpnguard.Enabled() {
+		if err := ovpnguard.InjectConf(inst.ConfPath()); err != nil {
+			return Instance{}, err
+		}
+	}
 	if err := service.WriteUnitFor(inst.svc()); err != nil {
 		return Instance{}, err
 	}
@@ -165,6 +174,7 @@ func Remove(id int) error {
 	_ = os.Remove(inst.ConfPath())
 	_ = os.Remove(fmt.Sprintf("/etc/openvpn/ipp%d.txt", inst.ID))
 	_ = os.Remove(fmt.Sprintf("/var/log/openvpn-status%d.log", inst.ID))
+	_ = os.Remove(ovpnguard.SocketPath(strconv.Itoa(inst.ID)))
 	removeInstanceNAT(inst)
 
 	list = append(list[:idx], list[idx+1:]...)

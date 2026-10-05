@@ -27,6 +27,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/lolyhexey/hexplus/internal/ovpnguard"
 	"github.com/lolyhexey/hexplus/internal/paths"
 	"github.com/lolyhexey/hexplus/internal/service"
 )
@@ -120,6 +121,10 @@ func Uninstall() error {
 	for _, svc := range service.All() {
 		_, _ = service.UninstallService(svc)
 	}
+	// The OpenVPN device-limit guard is not in service.All(): it only exists
+	// when the operator switched it on. Left behind it would keep restarting
+	// a binary that is about to be deleted.
+	ovpnguard.Teardown()
 
 	// Remove the menu shortcut first — but only if it's actually our symlink
 	// pointing at SelfPath. We don't want to clobber an operator's own /menu
