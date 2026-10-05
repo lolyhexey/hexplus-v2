@@ -22,6 +22,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -252,7 +253,7 @@ func logHandshakeFailure(src net.Conn, err error) {
 	if isHandshakeNoise(err) {
 		return
 	}
-	key := "hs-other"
+	key := "hs:" + handshakeClass(err)
 	var oe *net.OpError
 	if errors.As(err, &oe) && oe.Op == "remote error" {
 		key = "hs-alert:" + oe.Err.Error()
@@ -276,4 +277,31 @@ func isHandshakeNoise(err error) bool {
 	// Plain HTTP, SSH or garbage sent to the TLS port.
 	var rh tls.RecordHeaderError
 	return errors.As(err, &rh)
+}
+
+// handshakeClass names the kind of a TLS handshake error for throttling, so
+// scanners repeating one kind (unsupported versions, say) cannot suppress a
+// customer's different failure. crypto/tls messages are fixed text but some
+// carry peer-chosen values (a version list, a record length); those are cut
+// off so the set of keys stays small.
+func handshakeClass(err error) string {
+	msg := err.Error()
+	if i := strings.Index(msg, "tls: "); i >= 0 {
+		msg = msg[i:]
+	}
+	if i := strings.IndexAny(msg, "[0123456789"); i >= 0 {
+		msg = msg[:i]
+	}
+	prefix, rest := "", msg
+	if strings.HasPrefix(msg, "tls: ") {
+		prefix, rest = "tls: ", msg[len("tls: "):]
+	}
+	if i := strings.Index(rest, ":"); i >= 0 {
+		rest = rest[:i]
+	}
+	msg = strings.TrimSpace(prefix + rest)
+	if len(msg) > 64 {
+		msg = msg[:64]
+	}
+	return msg
 }
