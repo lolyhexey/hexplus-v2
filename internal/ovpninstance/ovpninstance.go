@@ -243,12 +243,7 @@ func Remove(id int) error {
 // primary 10.8.0.0/16. Best-effort: NAT problems shouldn't abort an add,
 // the operator can fix iptables by hand and the instance still runs.
 func setupInstanceNAT(inst Instance) {
-	rule := []string{"-t", "nat", "-A", "POSTROUTING", "-s", inst.Subnet(), "-j", "MASQUERADE"}
-	// -C checks existence; only append when absent so re-adds don't stack.
-	check := []string{"-t", "nat", "-C", "POSTROUTING", "-s", inst.Subnet(), "-j", "MASQUERADE"}
-	if exec.Command("iptables", check...).Run() != nil {
-		_ = exec.Command("iptables", rule...).Run()
-	}
+	_ = EnsureMasquerade(inst.Subnet())
 	persistRCLocal("iptables -t nat -A POSTROUTING -s " + inst.Subnet() + " -j MASQUERADE")
 
 	// NAT alone is not enough on a host whose FORWARD policy is DROP (any
@@ -275,8 +270,7 @@ func setupInstanceNAT(inst Instance) {
 }
 
 func removeInstanceNAT(inst Instance) {
-	_ = exec.Command("iptables", "-t", "nat", "-D", "POSTROUTING",
-		"-s", inst.Subnet(), "-j", "MASQUERADE").Run()
+	DeleteMasquerade(inst.Subnet())
 	unpersistRCLocal("iptables -t nat -A POSTROUTING -s " + inst.Subnet() + " -j MASQUERADE")
 	firewall.RemoveInput(inst.Proto, inst.Port)
 	unpersistRCLocal(firewall.InputRCLocalLine(inst.Proto, inst.Port))
