@@ -194,12 +194,21 @@ func setupInstanceNAT(inst Instance) {
 			persistRCLocal(l)
 		}
 	}
+
+	// The instance's own port, like the primary's: extra instances never
+	// opened it, so on a host whose INPUT policy is DROP they were
+	// unreachable.
+	if firewall.ApplyInput(inst.Proto, inst.Port) == nil {
+		persistRCLocal(firewall.InputRCLocalLine(inst.Proto, inst.Port))
+	}
 }
 
 func removeInstanceNAT(inst Instance) {
 	_ = exec.Command("iptables", "-t", "nat", "-D", "POSTROUTING",
 		"-s", inst.Subnet(), "-j", "MASQUERADE").Run()
 	unpersistRCLocal("iptables -t nat -A POSTROUTING -s " + inst.Subnet() + " -j MASQUERADE")
+	firewall.RemoveInput(inst.Proto, inst.Port)
+	unpersistRCLocal(firewall.InputRCLocalLine(inst.Proto, inst.Port))
 }
 
 const rcLocalPath = "/etc/rc.local"

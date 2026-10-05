@@ -1658,26 +1658,26 @@ func setupNetworking(port int, proto string) error {
 
 	// 4. Open the VPN port if a DROP/REJECT policy exists. FORWARD is
 	// opened separately in step 6b, after the SMTP/POP3 DROP rules.
-	out, _ := exec.Command("iptables", "-L", "-n").Output()
-	if strings.Contains(string(out), "REJECT") || strings.Contains(string(out), "DROP") {
-		exec.Command("iptables", "-I", "INPUT", "-p", proto,
-			"--dport", strconv.Itoa(port), "-j", "ACCEPT").Run()
+	// The rule is harmless on a host that accepts everything, and persisted
+	// below: without it a host whose INPUT policy is DROP closed the VPN
+	// port again after every reboot.
+	var inputLine string
+	if err := firewall.ApplyInput(proto, port); err != nil {
+		problems = append(problems, "เปิดพอร์ต "+strconv.Itoa(port)+"/"+proto+" ใน INPUT ไม่สำเร็จ: "+err.Error())
+	} else {
+		inputLine = firewall.InputRCLocalLine(proto, port)
 	}
 
 	// 5. Disable IPv6 (v1 conexao does this to prevent leaks).
 	_ = os.WriteFile("/proc/sys/net/ipv6/conf/all/disable_ipv6", []byte("1\n"), 0o644)
 
 	// 6. Block outbound SMTP/POP3 — VPS providers penalise spam relays.
-	// v1 adds these in rc.local; we apply them immediately too.
-	for _, args := range [][]string{
-		{"-A", "INPUT", "-p", "tcp", "--dport", "25", "-j", "DROP"},
-		{"-A", "INPUT", "-p", "tcp", "--dport", "110", "-j", "DROP"},
-		{"-A", "OUTPUT", "-p", "tcp", "--dport", "25", "-j", "DROP"},
-		{"-A", "OUTPUT", "-p", "tcp", "--dport", "110", "-j", "DROP"},
-		{"-A", "FORWARD", "-p", "tcp", "--dport", "25", "-j", "DROP"},
-		{"-A", "FORWARD", "-p", "tcp", "--dport", "110", "-j", "DROP"},
-	} {
-		exec.Command("iptables", args...).Run()
+	// v1 adds these in rc.local; we apply them immediately too. Checked
+	// first, so a reinstall does not append a second copy of each.
+	for _, r := range smtpBlockRules {
+		if exec.Command("iptables", append([]string{"-C"}, r...)...).Run() != nil {
+			exec.Command("iptables", append([]string{"-A"}, r...)...).Run()
+		}
 	}
 
 	// 6b. Let VPN clients forward out of the egress interface, and nowhere
@@ -1712,6 +1712,9 @@ func setupNetworking(port int, proto string) error {
 		"iptables -A FORWARD -p tcp --dport 110 -j DROP",
 	}
 	rules = append(rules, forwardLines...)
+	if inputLine != "" {
+		rules = append(rules, inputLine)
+	}
 	if raw, err := os.ReadFile(rclocal); err == nil {
 		content := string(raw)
 		if len(forwardLines) > 0 {
@@ -1831,6 +1834,17 @@ func openvpnAskPKICustom(r *bufio.Reader) pki.InitOptions {
 	}
 }
 
+// smtpBlockRules are the host-wide SMTP/POP3 DROP rules (chain first) that
+// setupNetworking adds and cleanupOpenVPN removes.
+var smtpBlockRules = [][]string{
+	{"INPUT", "-p", "tcp", "--dport", "25", "-j", "DROP"},
+	{"INPUT", "-p", "tcp", "--dport", "110", "-j", "DROP"},
+	{"OUTPUT", "-p", "tcp", "--dport", "25", "-j", "DROP"},
+	{"OUTPUT", "-p", "tcp", "--dport", "110", "-j", "DROP"},
+	{"FORWARD", "-p", "tcp", "--dport", "25", "-j", "DROP"},
+	{"FORWARD", "-p", "tcp", "--dport", "110", "-j", "DROP"},
+}
+
 // cleanupOpenVPN removes everything setupNetworking wrote and deletes
 // /etc/openvpn (including PKI). Matches v1's rmv_open() cleanup.
 //
@@ -1849,6 +1863,20 @@ func cleanupOpenVPN() {
 	// 10.8.0.0/16 ACCEPT). Extra instances were removed by the caller, so
 	// nothing else still needs them.
 	firewall.RemoveForward()
+
+	// The INPUT rule for the VPN port (read from server.conf, which still
+	// exists here) and the live SMTP/POP3 blocks. Only their rc.local lines
+	// used to be removed, so the port stayed open and mail stayed blocked
+	// for the whole host until the next reboot; older installs also stacked
+	// duplicates, hence the loops.
+	firewall.RemoveInput(ovpnProto(), ovpnPort())
+	for _, r := range smtpBlockRules {
+		for i := 0; i < 32; i++ {
+			if exec.Command("iptables", append([]string{"-D"}, r...)...).Run() != nil {
+				break
+			}
+		}
+	}
 
 	// Read any legacy SNAT --to <IP> lines from rc.local and tear each one
 	// down. Repeated installs with a changing public IP accumulate multiple
@@ -1893,6 +1921,7 @@ func cleanupOpenVPN() {
 		"iptables -A FORWARD -p tcp --dport 110 -j DROP",
 	}
 	cleanPrefixes = append(cleanPrefixes, firewall.RCLocalPrefixes...)
+	cleanPrefixes = append(cleanPrefixes, firewall.InputRCLocalLine(ovpnProto(), ovpnPort()))
 	if raw, err := os.ReadFile(rclocal); err == nil {
 		var kept []string
 		for _, line := range strings.Split(string(raw), "\n") {
