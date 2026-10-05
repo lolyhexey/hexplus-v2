@@ -15,14 +15,18 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"io"
+	"log"
 	"math/big"
 	"net"
 	"os"
 	"path/filepath"
 	"strconv"
+	"syscall"
 	"time"
 
 	"github.com/lolyhexey/hexplus/internal/acceptloop"
+	"github.com/lolyhexey/hexplus/internal/connlog"
 	"github.com/lolyhexey/hexplus/internal/netbridge"
 )
 
@@ -196,6 +200,8 @@ func Run(ctx context.Context) error {
 		return fmt.Errorf("listen :%d: %w", cfg.Port, err)
 	}
 
+	log.Printf("ssltunnel: listening on :%d -> %s", cfg.Port, cfg.Target)
+
 	go func() {
 		<-ctx.Done()
 		ln.Close()
@@ -217,6 +223,7 @@ func handleConn(src net.Conn, target string) {
 		hctx, cancel := context.WithTimeout(context.Background(), handshakeTimeout)
 		if err := tlsConn.HandshakeContext(hctx); err != nil {
 			cancel()
+			logHandshakeFailure(src, err)
 			src.Close()
 			return
 		}
@@ -224,8 +231,49 @@ func handleConn(src net.Conn, target string) {
 	}
 	dst, err := netbridge.Dial(target)
 	if err != nil {
+		failLog.Logf("dial:"+target, "ssltunnel: backend dial failed: %v (client %s)", err, connlog.IP(src.RemoteAddr()))
 		src.Close()
 		return
 	}
 	netbridge.Pipe(src, dst)
+}
+
+// failLog carries the lines an operator has to act on. Successful sessions
+// are deliberately not logged, and repeats are folded: the port faces the
+// Internet and the menu shows only the last 50 journal lines.
+var failLog = connlog.New(5*time.Minute, log.Printf)
+
+// logHandshakeFailure reports a failed TLS handshake unless it is the kind
+// scanners and flaky mobile links produce all day. What is left is mainly the
+// peer rejecting this server's self-signed certificate (a TLS alert), which
+// is a client setup problem worth seeing. Only the error text is logged,
+// never bytes the peer sent.
+func logHandshakeFailure(src net.Conn, err error) {
+	if isHandshakeNoise(err) {
+		return
+	}
+	key := "hs-other"
+	var oe *net.OpError
+	if errors.As(err, &oe) && oe.Op == "remote error" {
+		key = "hs-alert:" + oe.Err.Error()
+	}
+	failLog.Logf(key, "ssltunnel: TLS handshake with %s failed: %v", connlog.IP(src.RemoteAddr()), err)
+}
+
+func isHandshakeNoise(err error) bool {
+	for _, target := range []error{
+		io.EOF, io.ErrUnexpectedEOF, net.ErrClosed, os.ErrDeadlineExceeded,
+		context.DeadlineExceeded, syscall.ECONNRESET, syscall.EPIPE,
+	} {
+		if errors.Is(err, target) {
+			return true
+		}
+	}
+	var ne net.Error
+	if errors.As(err, &ne) && ne.Timeout() {
+		return true
+	}
+	// Plain HTTP, SSH or garbage sent to the TLS port.
+	var rh tls.RecordHeaderError
+	return errors.As(err, &rh)
 }
