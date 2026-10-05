@@ -1,10 +1,12 @@
 package sslhmux
 
 import (
+	"errors"
 	"net"
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/lolyhexey/hexplus/internal/ssltunnel"
 )
@@ -23,11 +25,54 @@ var (
 	sslTunnelPort    = func() int {
 		cfg, err := ssltunnel.Load()
 		if err != nil {
-			return 0
+			// Unreadable is not "not installed" (Load returns no error then):
+			// keep the port read last time.
+			return lastTunnelPort.get()
 		}
+		lastTunnelPort.set(cfg.Port)
 		return cfg.Port
 	}
+	readConf = os.ReadFile
 )
+
+// Backends are read on every connection, so a read can fail for reasons
+// that say nothing about the service, notably EMFILE while the multiplexer
+// is short of file descriptors. Only a missing file means "not there";
+// for any other error the content read last time is used, instead of
+// falling back to a default port the service may not be on.
+var (
+	confMu   sync.Mutex
+	lastConf = map[string][]byte{}
+)
+
+// readLive returns the file's current content, or the last content read
+// when the file exists but cannot be read now. ok is false when the file
+// is missing (or was never readable).
+func readLive(path string) ([]byte, bool) {
+	data, err := readConf(path)
+	confMu.Lock()
+	defer confMu.Unlock()
+	if err == nil {
+		lastConf[path] = data
+		return data, true
+	}
+	if errors.Is(err, os.ErrNotExist) {
+		delete(lastConf, path)
+		return nil, false
+	}
+	data, ok := lastConf[path]
+	return data, ok
+}
+
+type lastPort struct {
+	mu sync.Mutex
+	n  int
+}
+
+func (l *lastPort) get() int  { l.mu.Lock(); defer l.mu.Unlock(); return l.n }
+func (l *lastPort) set(n int) { l.mu.Lock(); l.n = n; l.mu.Unlock() }
+
+var lastTunnelPort lastPort
 
 const loopbackHost = "127.0.0.1"
 
@@ -44,7 +89,7 @@ func Detect() Config {
 // DetectSSH returns the first Port of sshd_config, 127.0.0.1:22 when none.
 func DetectSSH() string {
 	port := 22
-	if data, err := os.ReadFile(sshdConfigPath); err == nil {
+	if data, ok := readLive(sshdConfigPath); ok {
 		for _, line := range strings.Split(string(data), "\n") {
 			f := strings.Fields(line)
 			if len(f) < 2 || !strings.EqualFold(f[0], "Port") {
@@ -73,8 +118,8 @@ func DetectSSL() string {
 // DetectHTTP returns the first plain forward-proxy http_port of squid.conf,
 // or "" when Squid has none. A wildcard bind address is dialled on loopback.
 func DetectHTTP() string {
-	data, err := os.ReadFile(squidConfPath)
-	if err != nil {
+	data, ok := readLive(squidConfPath)
+	if !ok {
 		return ""
 	}
 	for _, line := range strings.Split(string(data), "\n") {
@@ -115,8 +160,8 @@ func reverseProxyOnly(opts []string) bool {
 func DetectOpenVPN() string {
 	port := 1194
 	for _, path := range openvpnConfPaths {
-		data, err := os.ReadFile(path)
-		if err != nil {
+		data, ok := readLive(path)
+		if !ok {
 			continue
 		}
 		for _, line := range strings.Split(string(data), "\n") {
