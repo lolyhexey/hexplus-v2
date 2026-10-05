@@ -49,8 +49,8 @@ func Add(in AddInput, ovpnIn OVPNInput) (AddResult, error) {
 	if err := ValidateName(in.Name); err != nil {
 		return res, fmt.Errorf("%s: %w", in.Name, err)
 	}
-	if in.Password == "" {
-		return res, errors.New("password is required")
+	if err := CheckVPNPassword(in.Password); err != nil {
+		return res, err
 	}
 
 	exists, err := SystemUserExists(in.Name)
@@ -238,8 +238,8 @@ func UpdatePassword(name, password string) error {
 	if os.Geteuid() != 0 {
 		return errors.New("user passwd requires root; rerun under sudo")
 	}
-	if password == "" {
-		return errors.New("password is required")
+	if err := CheckVPNPassword(password); err != nil {
+		return err
 	}
 	return SetPassword(name, password)
 }

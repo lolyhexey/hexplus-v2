@@ -110,6 +110,31 @@ func chpasswdCmd(name, password string) *exec.Cmd {
 	return cmd
 }
 
+// MaxVPNPasswordLen is the longest password the embedded OpenVPN accepts:
+// built without PKCS#11, its USER_PASS_LEN is 128 bytes including the
+// terminating NUL, and a longer password fails the TLS handshake before the
+// auth script runs. (openssl passwd would also ignore everything past 256.)
+const MaxVPNPasswordLen = 127
+
+// ErrPasswordTooLong is returned for a password OpenVPN would never accept.
+var ErrPasswordTooLong = fmt.Errorf("password longer than %d bytes: OpenVPN cannot log in with it", MaxVPNPasswordLen)
+
+// CheckVPNPassword rejects a password a VPN user could never log in with or
+// that would corrupt the chpasswd input: empty, longer than
+// MaxVPNPasswordLen bytes, or containing a line break or NUL (chpasswd reads
+// one "name:password" per line).
+func CheckVPNPassword(password string) error {
+	switch {
+	case password == "":
+		return errors.New("password is required")
+	case len(password) > MaxVPNPasswordLen:
+		return ErrPasswordTooLong
+	case strings.ContainsAny(password, "\r\n\x00"):
+		return errors.New("password must not contain a line break or NUL")
+	}
+	return nil
+}
+
 // SetPassword feeds 'name:password\n' to `chpasswd -c SHA512`, which
 // writes a $6$ hash to /etc/shadow. We avoid `passwd <name>` because it
 // wants a tty.
