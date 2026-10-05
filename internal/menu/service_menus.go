@@ -1870,6 +1870,9 @@ func cleanupOpenVPN() {
 	// for the whole host until the next reboot; older installs also stacked
 	// duplicates, hence the loops.
 	firewall.RemoveInput(ovpnProto(), ovpnPort())
+	// Every INPUT line still in rc.local is the primary's (instances were
+	// removed first), including ports it used before a port change.
+	_ = firewall.RemovePersistedInput(rclocal)
 	for _, r := range smtpBlockRules {
 		for i := 0; i < 32; i++ {
 			if exec.Command("iptables", append([]string{"-D"}, r...)...).Run() != nil {
@@ -1921,7 +1924,7 @@ func cleanupOpenVPN() {
 		"iptables -A FORWARD -p tcp --dport 110 -j DROP",
 	}
 	cleanPrefixes = append(cleanPrefixes, firewall.RCLocalPrefixes...)
-	cleanPrefixes = append(cleanPrefixes, firewall.InputRCLocalLine(ovpnProto(), ovpnPort()))
+	cleanPrefixes = append(cleanPrefixes, firewall.InputRCLocalPrefix)
 	if raw, err := os.ReadFile(rclocal); err == nil {
 		var kept []string
 		for _, line := range strings.Split(string(raw), "\n") {

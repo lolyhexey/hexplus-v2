@@ -25,6 +25,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/lolyhexey/hexplus/internal/firewall"
 	"github.com/lolyhexey/hexplus/internal/ovpninstance"
 	"github.com/lolyhexey/hexplus/internal/panel"
 	"github.com/lolyhexey/hexplus/internal/proxy"
@@ -950,6 +951,12 @@ func changeServicePort(r *bufio.Reader, svc service.Service) error {
 	case "openvpn":
 		if err := rewriteConfPort("/etc/openvpn/server.conf", `(?m)^\s*port\s+\d+\b`, fmt.Sprintf("port %d", newPort)); err != nil {
 			return err
+		}
+		// The INPUT rule and its rc.local line follow the port; otherwise
+		// the old port stays open at every boot and a host whose INPUT
+		// policy is DROP never lets clients reach the new one.
+		if err := firewall.MoveInput(ovpnProto(), currentPort, newPort, firewall.RCLocalPath); err != nil {
+			fmt.Println("\n" + cYelBold + "คำเตือน: ย้ายกฎ INPUT ไปพอร์ตใหม่ไม่สำเร็จ ลูกค้าอาจต่อพอร์ตใหม่ไม่ได้: " + err.Error() + cReset)
 		}
 	case "squid":
 		if err := rewriteConfPort("/etc/squid/squid.conf", `(?m)^\s*http_port\s+\d+\b`, fmt.Sprintf("http_port %d", newPort)); err != nil {
