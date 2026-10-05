@@ -821,6 +821,7 @@ func openvpnMenu(r *bufio.Reader, svc service.Service) error {
 		fmt.Printf("%s[%s9%s] %s• %sพอร์ตเพิ่มเติม %s%s\n", cRedBold, cCyanBold, cRedBold, cWhtBold, cYelBold, instMark, cReset)
 		fmt.Printf("%s[%s10%s] %s• %sจำกัดจำนวนอุปกรณ์ต่อผู้ใช้ %s%s\n", cRedBold, cCyanBold, cRedBold, cWhtBold, cYelBold, guardMark, cReset)
 		fmt.Printf("%s[%s11%s] %s• %sกระจายโหลดทุก CPU %s%s\n", cRedBold, cCyanBold, cRedBold, cWhtBold, cYelBold, spreadMark(), cReset)
+		fmt.Printf("%s[%s12%s] %s• %sปรับแต่ง Payload (.ovpn สำหรับแอป injector)%s\n", cRedBold, cCyanBold, cRedBold, cWhtBold, cYelBold, cReset)
 		fmt.Printf("%s[%s0%s] %s• %sย้อนกลับ%s\n", cRedBold, cCyanBold, cRedBold, cWhtBold, cYelBold, cReset)
 		fmt.Println()
 
@@ -915,6 +916,11 @@ func openvpnMenu(r *bufio.Reader, svc service.Service) error {
 			toggleDeviceLimit(r, svc)
 		case "11":
 			toggleSpread(r)
+		case "12":
+			if err := runPayload(r); err != nil {
+				fmt.Println("\n" + cRedBold + "[ผิดพลาด] " + cYelBold + err.Error() + cReset)
+				waitEnter(r)
+			}
 		default:
 			fmt.Println("\n" + cRedBold + "กรุณาเลือกให้ถูกต้อง..." + cReset)
 			time.Sleep(2 * time.Second)

@@ -52,7 +52,7 @@ var payloadPresets = []payloadPreset{
 // lines (some operators ship a list with `;` prefixes) stay untouched.
 var remoteLineRE = regexp.MustCompile(`(?m)^remote\s+\S+\s+\d+(\s+\S+)?\s*$`)
 
-// runPayload is what conexao.go wires the openvpn-only "8" action to.
+// runPayload is OpenVPN menu option [12].
 func runPayload(r *bufio.Reader) error {
 	clearScreen()
 	printSep()
