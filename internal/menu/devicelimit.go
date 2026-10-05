@@ -28,7 +28,7 @@ func toggleDeviceLimit(r *bufio.Reader, primary service.Service) {
 		if ovpnConfContains("duplicate-cn") {
 			fmt.Println()
 		} else {
-			fmt.Println(cYelBold + "หมายเหตุ: MULTILOGIN ปิดอยู่ พอร์ตหลักจึงยังจำกัด 1 เครื่องต่อผู้ใช้อยู่แล้ว" + cReset)
+			fmt.Println(cYelBold + "หมายเหตุ: MULTILOGIN ปิดอยู่ ทุกคนจะถูกจำกัด 1 เครื่อง นับรวมทุกพอร์ตและทุก process" + cReset)
 		}
 	} else {
 		paintTitleBar("     จำกัดจำนวนอุปกรณ์ต่อผู้ใช้ (ปิด)      ")
