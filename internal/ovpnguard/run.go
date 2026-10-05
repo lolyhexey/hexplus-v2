@@ -27,6 +27,8 @@ var (
 	shadowPath = "/etc/shadow"
 	v1DBPath   = "/root/usuarios.db"
 	now        = time.Now
+	// primaryConf carries the MULTILOGIN switch (duplicate-cn).
+	primaryConf = "/etc/openvpn/server.conf"
 )
 
 // sockets returns instance name -> management socket path for every socket
@@ -218,8 +220,23 @@ func loadPolicy(logf func(string, ...any)) Policy {
 		logf("ovpnguard: %v (expired and deleted accounts are not checked)", err)
 	}
 	today := now().Unix() / 86400
+
+	// MULTILOGIN off (no duplicate-cn) means one session per user. OpenVPN
+	// enforces that only inside one process, so with extra ports or CPU
+	// spreading a user could hold one session per process; the guard holds
+	// it to one across all of them. Unreadable config: no cap.
+	single := false
+	if raw, err := os.ReadFile(primaryConf); err == nil {
+		single = !hasDuplicateCN(string(raw))
+	}
 	return Policy{
-		Limit:   func(name string) int { return limitFor(name, v2, v1) },
+		Limit: func(name string) int {
+			l := limitFor(name, v2, v1)
+			if single && l != 1 {
+				return 1
+			}
+			return l
+		},
 		Refused: func(name string) string { return refusal(name, shadow, today) },
 	}
 }
@@ -304,4 +321,13 @@ func refusal(name string, shadow map[string][2]string, today int64) string {
 		return "บัญชีหมดอายุ"
 	}
 	return ""
+}
+
+func hasDuplicateCN(conf string) bool {
+	for _, l := range strings.Split(conf, "\n") {
+		if strings.TrimSpace(l) == "duplicate-cn" {
+			return true
+		}
+	}
+	return false
 }

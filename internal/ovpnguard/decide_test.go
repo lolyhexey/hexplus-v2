@@ -272,11 +272,12 @@ func TestActivityMarksSessionsWhoseCounterStopped(t *testing.T) {
 // The fail-safe: when the guard cannot read its inputs it must enforce
 // less, never more.
 func TestLoadPolicyIsLenientWhenInputsAreMissing(t *testing.T) {
-	oldShadow, oldV1 := shadowPath, v1DBPath
-	t.Cleanup(func() { shadowPath, v1DBPath = oldShadow, oldV1 })
+	oldShadow, oldV1, oldConf := shadowPath, v1DBPath, primaryConf
+	t.Cleanup(func() { shadowPath, v1DBPath, primaryConf = oldShadow, oldV1, oldConf })
 	dir := t.TempDir()
 	shadowPath = filepath.Join(dir, "no-shadow")
 	v1DBPath = filepath.Join(dir, "no-usuarios.db")
+	primaryConf = filepath.Join(dir, "no-server.conf") // unreadable: MULTILOGIN unknown, no cap
 
 	var logs []string
 	p := loadPolicy(func(f string, a ...any) { logs = append(logs, f) })
@@ -295,6 +296,34 @@ func TestLoadPolicyIsLenientWhenInputsAreMissing(t *testing.T) {
 	}
 	if l := loadPolicy(func(string, ...any) {}).Limit("bob"); l != 2 {
 		t.Errorf("v1 limit = %d, want 2", l)
+	}
+}
+
+// MULTILOGIN off: OpenVPN refuses a second session only inside one
+// process, so with extra ports or CPU spreading the guard has to hold every
+// user to one session across all of them.
+func TestLoadPolicyCapsAtOneWhenMultiloginIsOff(t *testing.T) {
+	oldShadow, oldV1, oldConf := shadowPath, v1DBPath, primaryConf
+	t.Cleanup(func() { shadowPath, v1DBPath, primaryConf = oldShadow, oldV1, oldConf })
+	dir := t.TempDir()
+	shadowPath = filepath.Join(dir, "no-shadow")
+	v1DBPath = filepath.Join(dir, "usuarios.db")
+	primaryConf = filepath.Join(dir, "server.conf")
+	if err := os.WriteFile(v1DBPath, []byte("bob 3\nann 1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	limits := func(conf string) [3]int {
+		if err := os.WriteFile(primaryConf, []byte(conf), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		p := loadPolicy(func(string, ...any) {})
+		return [3]int{p.Limit("bob"), p.Limit("ann"), p.Limit("nolimit")}
+	}
+	if got := limits("port 443\nproto tcp\n"); got != [3]int{1, 1, 1} {
+		t.Errorf("MULTILOGIN off: limits = %v, want every user at 1", got)
+	}
+	if got := limits("port 443\nduplicate-cn\n"); got != [3]int{3, 1, 0} {
+		t.Errorf("MULTILOGIN on: limits = %v, want the users' own limits", got)
 	}
 }
 
