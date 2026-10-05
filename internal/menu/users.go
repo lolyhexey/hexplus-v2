@@ -107,9 +107,12 @@ func listAndPick(r *bufio.Reader, prompt string) (user.Record, error) {
 // systemUsers returns all non-root system accounts (UID ≥ 1000, ≠ nobody)
 // from /etc/passwd, the same source v1 uses for every user-management
 // screen. Metadata (limit) is merged from:
-//  1. /var/lib/hexplus/users.json  — v2 DB
+//  1. /var/lib/hexplus/users.json  — v2 DB (a Limit of 0 there falls through)
 //  2. /root/usuarios.db            — v1 DB (format: "name limit\n")
-//  3. default limit = 1
+//  3. otherwise 0 = no limit
+//
+// The same precedence as the OpenVPN device-limit guard (ovpnguard.limitFor),
+// so the screens show the limit that is actually enforced.
 func systemUsers() []user.Record {
 	raw, err := os.ReadFile("/etc/passwd")
 	if err != nil {
@@ -146,10 +149,17 @@ func systemUsers() []user.Record {
 	out := make([]user.Record, 0, len(names))
 	for _, name := range names {
 		if rec, ok := db.Users[name]; ok {
+			// "Change expiry" creates a users.json row with Limit 0 for a
+			// user that only had a v1 limit; that row must not hide it.
+			if rec.Limit <= 0 && v1Limits[name] > 0 {
+				rec.Limit = v1Limits[name]
+			}
 			out = append(out, rec)
 			continue
 		}
-		rec := user.Record{Name: name, Limit: 1}
+		// No limit recorded anywhere means none: that is what the device-
+		// limit guard enforces, and what the user DB documents for 0.
+		rec := user.Record{Name: name}
 		if lim, ok := v1Limits[name]; ok {
 			rec.Limit = lim
 		}
@@ -574,9 +584,9 @@ func runSSHMonitor(r *bufio.Reader) error {
 		} else {
 			statusText = cGrnBold + "ออนไลน์ " + cYelBold + "      "
 		}
-		limit := rec.Limit
-		if limit == 0 {
-			limit = 1
+		limit := "∞"
+		if rec.Limit > 0 {
+			limit = strconv.Itoa(rec.Limit)
 		}
 
 		timer := "00:00:00"
@@ -594,7 +604,7 @@ func runSSHMonitor(r *bufio.Reader) error {
 			cYelBold,
 			rec.Name,
 			statusText,
-			fmt.Sprintf("%d/%d", conex, limit),
+			fmt.Sprintf("%d/%s", conex, limit),
 			timer,
 			cReset)
 		fmt.Println(cBluBold + separator + cReset)
@@ -1105,7 +1115,7 @@ func runListUsers(r *bufio.Reader) error {
 		// expiry from chage (authoritative — covers both v1 and v2 users)
 		exp, daysLeft := chageExpiry(rec.Name)
 
-		limit := "1"
+		limit := "∞" // same label as the online monitor; a Thai word breaks the column width
 		if rec.Limit > 0 {
 			limit = strconv.Itoa(rec.Limit)
 		}
