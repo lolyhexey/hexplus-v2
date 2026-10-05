@@ -89,12 +89,12 @@ func TestRealYescryptRepair(t *testing.T) {
 }
 
 // With SHA_CRYPT_MIN_ROUNDS/MAX_ROUNDS in /etc/login.defs, chpasswd -c SHA512
-// writes "$6$rounds=N$salt$hash". hexplus-auth.sh splits on '$' and takes
-// "rounds=N" as the salt, so it rejects that hash. The detector must flag it,
-// and a repair must not claim success, because chpasswd writes the same shape
-// again. Same guards and container advice as TestRealYescryptRepair; this one
-// also edits /etc/login.defs.
-func TestRealRoundsHashIsFlaggedAndNotReportedFixed(t *testing.T) {
+// writes "$6$rounds=N$salt$hash". hexplus-auth.sh handles that shape (the
+// script test in internal/pki checks the login itself), so the detector must
+// not flag it: flagging sent the operator into a repair that could never
+// succeed. Same guards and container advice as TestRealYescryptRepair; this
+// one also edits /etc/login.defs.
+func TestRealRoundsHashIsNotFlagged(t *testing.T) {
 	if os.Getenv("HEXPLUS_USER_IT") != "1" {
 		t.Skip("set HEXPLUS_USER_IT=1 in a throwaway container to run")
 	}
@@ -127,13 +127,7 @@ func TestRealRoundsHashIsFlaggedAndNotReportedFixed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(bad, []string{"hxrounds"}) {
-		t.Fatalf("a rounds= hash must be flagged, got %v", bad)
-	}
-
-	writeSenha(t, map[string]string{"hxrounds": "pw rounds\n"})
-	fixed, noStored, failed := repairUnverifiableHashes(bad)
-	if len(fixed) != 0 || len(noStored) != 0 || failed["hxrounds"] == nil {
-		t.Errorf("repair must report failure, got fixed=%v noStored=%v failed=%v", fixed, noStored, failed)
+	if len(bad) != 0 {
+		t.Fatalf("a rounds= hash was flagged as unverifiable: %v", bad)
 	}
 }

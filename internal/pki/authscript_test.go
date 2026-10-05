@@ -133,6 +133,21 @@ func TestAuthScriptVerifiesPasswords(t *testing.T) {
 			t.Errorf("$%s$: wrong password accepted", alg)
 		}
 	}
+	// login.defs with SHA_CRYPT_MIN/MAX_ROUNDS makes chpasswd write
+	// $6$rounds=N$salt$digest; the script used to take "rounds=N" as the
+	// salt and reject the right password.
+	for _, alg := range []string{"6", "5"} {
+		hash := h.hash(alg, "rounds=6000$saltsalt", "pw one")
+		if !strings.HasPrefix(hash, "$"+alg+"$rounds=6000$") {
+			t.Fatalf("test setup: openssl did not produce a rounds= hash: %s", hash)
+		}
+		if !h.login(shadowLine("dave", hash, ""), "dave", "pw one") {
+			t.Errorf("$%s$rounds=: correct password rejected", alg)
+		}
+		if h.login(shadowLine("dave", hash, ""), "dave", "pw two") {
+			t.Errorf("$%s$rounds=: wrong password accepted", alg)
+		}
+	}
 	// A password that looks like an option used to reach openssl as argv.
 	dash := h.hash("6", "saltsalt", "-stdin")
 	if !h.login(shadowLine("bob", dash, ""), "bob", "-stdin") {

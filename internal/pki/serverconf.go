@@ -42,6 +42,11 @@ esac
 
 ALG=$(echo "$HASH"  | awk -F'$' '{print $2}')
 SALT=$(echo "$HASH" | awk -F'$' '{print $3}')
+# With SHA_CRYPT_MIN/MAX_ROUNDS in login.defs the hash is
+# $6$rounds=N$salt$digest; openssl passwd takes "rounds=N$salt" as the salt.
+case "$SALT" in
+    rounds=*) SALT="$SALT\$$(echo "$HASH" | awk -F'$' '{print $4}')" ;;
+esac
 
 # The password goes to openssl on stdin (printf is a shell builtin): on the
 # command line it was readable by every local user in /proc/<pid>/cmdline.
