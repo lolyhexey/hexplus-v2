@@ -17,6 +17,8 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/lolyhexey/hexplus/internal/acceptloop"
 )
 
 // peekTimeout bounds how long handleMuxConn waits for the first bytes of a
@@ -133,7 +135,8 @@ func bridge(src, dst net.Conn) {
 
 // Run loads the config, opens a TCP listener on cfg.Port, peeks the first
 // bytes of each accepted connection, routes to the correct backend, and
-// bridges bidirectionally. Returns when ctx is cancelled.
+// bridges bidirectionally. Returns nil when ctx is cancelled. Temporary accept
+// errors such as EMFILE are retried; any other accept error is returned.
 func Run(ctx context.Context) error {
 	cfg, err := Load()
 	if err != nil {
@@ -153,18 +156,9 @@ func Run(ctx context.Context) error {
 		ln.Close()
 	}()
 
-	for {
-		conn, err := ln.Accept()
-		if err != nil {
-			select {
-			case <-ctx.Done():
-				return nil
-			default:
-				return fmt.Errorf("accept: %w", err)
-			}
-		}
-		go handleMuxConn(conn, cfg)
-	}
+	return acceptloop.Serve(ctx, "sslhmux", ln, func(conn net.Conn) {
+		handleMuxConn(conn, cfg)
+	})
 }
 
 // handleMuxConn peeks up to 8 bytes, detects the protocol, dials the backend,

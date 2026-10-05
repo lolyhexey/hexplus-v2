@@ -22,6 +22,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"time"
+
+	"github.com/lolyhexey/hexplus/internal/acceptloop"
 )
 
 const (
@@ -170,8 +172,10 @@ func GenerateCert() error {
 }
 
 // Run loads the config, opens a TLS listener on cfg.Port, and forwards each
-// accepted connection to cfg.Target via bidirectional io.Copy. It returns
-// when ctx is cancelled (listener is closed to unblock Accept).
+// accepted connection to cfg.Target via bidirectional io.Copy. It returns nil
+// when ctx is cancelled (listener is closed to unblock Accept). Temporary
+// accept errors such as EMFILE are retried; any other accept error is
+// returned.
 func Run(ctx context.Context) error {
 	cfg, err := Load()
 	if err != nil {
@@ -197,18 +201,9 @@ func Run(ctx context.Context) error {
 		ln.Close()
 	}()
 
-	for {
-		conn, err := ln.Accept()
-		if err != nil {
-			select {
-			case <-ctx.Done():
-				return nil
-			default:
-				return fmt.Errorf("accept: %w", err)
-			}
-		}
-		go handleConn(conn, cfg.Target)
-	}
+	return acceptloop.Serve(ctx, "ssltunnel", ln, func(conn net.Conn) {
+		handleConn(conn, cfg.Target)
+	})
 }
 
 // handshakeTimeout bounds TLS handshake + initial peek so half-open scanners
