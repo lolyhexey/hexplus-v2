@@ -57,6 +57,7 @@ func Run() error {
 	_ = speedlimit.EnsureScript()
 	_ = pki.EnsureAuthScript()
 	r := bufio.NewReader(os.Stdin)
+	repairPluginConfs(r)
 	for {
 		if err := paintMainMenu(); err != nil {
 			return err
