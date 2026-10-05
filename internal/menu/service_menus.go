@@ -1708,9 +1708,10 @@ func setupNetworking(port int, proto string) error {
 
 	// 3. iptables MASQUERADE — let VPN clients reach the internet via the
 	// box's actual egress interface, whatever its address happens to be.
-	if out, err := exec.Command("iptables", "-t", "nat", "-A", "POSTROUTING",
-		"-s", "10.8.0.0/16", "-j", "MASQUERADE").CombinedOutput(); err != nil {
-		problems = append(problems, "MASQUERADE: "+err.Error()+" "+strings.TrimSpace(string(out)))
+	// Added only when absent: a reinstall after `hexplus uninstall` (which
+	// leaves the live rule) must not stack another copy.
+	if err := ovpninstance.EnsureMasquerade("10.8.0.0/16"); err != nil {
+		problems = append(problems, "MASQUERADE: "+err.Error())
 	}
 
 	// 4. Open the VPN port if a DROP/REJECT policy exists. FORWARD is
@@ -1910,9 +1911,9 @@ var smtpBlockRules = [][]string{
 func cleanupOpenVPN() {
 	const rclocal = "/etc/rc.local"
 
-	// Remove live MASQUERADE rule (post-fix).
-	if err := exec.Command("iptables", "-t", "nat", "-D", "POSTROUTING",
-		"-s", "10.8.0.0/16", "-j", "MASQUERADE").Run(); err == nil {
+	// Remove the live MASQUERADE rule, every copy of it: older installs
+	// and reinstalls stacked duplicates, and one -D removes only one.
+	if ovpninstance.DeleteMasquerade("10.8.0.0/16") > 0 {
 		fmt.Println(cYelBold + "  - iptables MASQUERADE 10.8.0.0/16" + cReset)
 	}
 
