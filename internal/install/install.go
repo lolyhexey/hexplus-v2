@@ -145,6 +145,9 @@ func Uninstall() error {
 	if err := ovpnspread.Disable(func(string, ...any) {}); err != nil {
 		fmt.Fprintln(os.Stderr, "warning: OpenVPN CPU spreading not fully removed:", err)
 	}
+	if err := removeFrontends(); err != nil {
+		fmt.Fprintln(os.Stderr, "warning: SSL TUNNEL / SSLH / proxies not fully removed:", err)
+	}
 
 	// Remove the menu shortcut first — but only if it's actually our symlink
 	// pointing at SelfPath. We don't want to clobber an operator's own /menu

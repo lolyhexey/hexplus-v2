@@ -172,7 +172,7 @@ func runUninstall() {
 		fmt.Fprintln(os.Stderr, "uninstall:", err)
 		os.Exit(1)
 	}
-	fmt.Println("hexplus uninstalled (primary configs under /etc and /var/lib kept; extra OpenVPN ports and CPU spreading removed).")
+	fmt.Println("hexplus uninstalled (primary configs under /etc and /var/lib kept; extra OpenVPN ports, CPU spreading, SSL TUNNEL, SSLH and proxies removed).")
 }
 
 func runStatus() {
