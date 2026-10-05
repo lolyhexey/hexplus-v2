@@ -87,11 +87,10 @@ func InstallService(svc Service) (InstallResult, error) {
 		res.UnitsWritten = wr.Written
 	}
 
-	// Config bootstrap only for the service we're installing.
-	if cfg, err := bootstrapConfigFor(svc); err != nil {
+	// Support dirs/files only for the service we're installing. No config
+	// file is written here; see bootstrap.go.
+	if err := bootstrapSupportFor(svc); err != nil {
 		return res, err
-	} else if cfg != "" {
-		res.ConfigsWritten = append(res.ConfigsWritten, cfg)
 	}
 
 	return res, nil
@@ -262,31 +261,31 @@ func extractEmbedded(srcName, dest string, mode os.FileMode) (bool, error) {
 	return true, nil
 }
 
-// bootstrapConfigFor lays down the default config for one service.
-// Returns the path of the file that was written, or "" if no config
-// applies (dropbear lazily generates host keys via -R) or the file
-// already existed.
-func bootstrapConfigFor(svc Service) (string, error) {
+// bootstrapSupportFor creates the state directories and support files one
+// service needs to start. It never writes a service config: squid.conf is
+// written by the menu's squidInstall (dropbear lazily generates host keys
+// via -R).
+func bootstrapSupportFor(svc Service) error {
 	if err := os.MkdirAll("/etc/squid", 0o755); err != nil {
-		return "", err
+		return err
 	}
 	if err := os.MkdirAll("/etc/dropbear", 0o700); err != nil {
-		return "", err
+		return err
 	}
 	if err := os.MkdirAll("/etc/openvpn", 0o755); err != nil {
-		return "", err
+		return err
 	}
 	if err := os.MkdirAll("/var/spool/squid", 0o750); err != nil {
-		return "", err
+		return err
 	}
 	switch svc.Name {
 	case "squid":
 		// Squid data files - mime.conf is bundled in the hexplus binary.
 		if err := os.MkdirAll("/usr/share/squid", 0o755); err != nil {
-			return "", err
+			return err
 		}
 		if _, err := extractEmbedded("mime.conf", "/usr/share/squid/mime.conf", 0o644); err != nil {
-			return "", fmt.Errorf("extract mime.conf: %w", err)
+			return fmt.Errorf("extract mime.conf: %w", err)
 		}
 		// Runtime dirs: icons/errors must exist (can be empty for a connect proxy).
 		// Owned by nobody because squid drops privileges before writing pid file.
@@ -295,7 +294,7 @@ func bootstrapConfigFor(svc Service) (string, error) {
 			"/var/spool/squid/errors",
 		} {
 			if err := os.MkdirAll(dir, 0o755); err != nil {
-				return "", err
+				return err
 			}
 			_ = os.Lchown(dir, 65534, 65534) // nobody:nogroup
 		}
@@ -303,24 +302,17 @@ func bootstrapConfigFor(svc Service) (string, error) {
 		// logfile_daemon stub: Squid checks for binary existence at startup even
 		// when access_log is none. A script that reads-and-discards satisfies it.
 		if err := os.MkdirAll("/usr/lib/squid", 0o755); err != nil {
-			return "", err
+			return err
 		}
 		const logDaemonStub = "#!/bin/sh\nwhile IFS= read -r line; do :; done\n"
 		if _, err := writeIfMissing("/usr/lib/squid/log_file_daemon", []byte(logDaemonStub), 0o755); err != nil {
-			return "", fmt.Errorf("write log_file_daemon stub: %w", err)
+			return fmt.Errorf("write log_file_daemon stub: %w", err)
 		}
 		if err := extractTarGz("squid-errors.tar.gz", "/var/spool/squid/errors"); err != nil {
-			return "", fmt.Errorf("extract squid error templates: %w", err)
-		}
-		wrote, err := writeIfMissing("/etc/squid/squid.conf", []byte(defaultSquidConf), 0o644)
-		if err != nil {
-			return "", err
-		}
-		if wrote {
-			return "/etc/squid/squid.conf", nil
+			return fmt.Errorf("extract squid error templates: %w", err)
 		}
 	}
-	return "", nil
+	return nil
 }
 
 // WriteUnitsFor renders units for a subset of services and runs
