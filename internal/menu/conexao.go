@@ -945,6 +945,29 @@ func changeServicePort(r *bufio.Reader, svc service.Service) error {
 		return nil
 	}
 
+	// Refuse a port something else holds before anything is written.
+	proto := svc.PortProto
+	if svc.Name == "openvpn" {
+		proto = ovpnProto()
+	}
+	self := []int{currentPort}
+	if svc.Name == "dropbear" {
+		if st, err := service.Status(svc); err == nil && st.ActiveState == "active" {
+			self = append(self, 110) // dropbear's own second listener
+		}
+	}
+	conflict := portChangeConflict(proto, newPort, self...)
+	if conflict == nil && svc.Name == "openvpn" && newPort != currentPort {
+		if inst, taken := instanceOnPort(proto, newPort); taken {
+			conflict = fmt.Errorf("พอร์ต %d/%s เป็นของ OPENVPN #%d — เลือกพอร์ตอื่น", newPort, proto, inst.ID)
+		}
+	}
+	if conflict != nil {
+		fmt.Println("\n" + cRedBold + "[ผิดพลาด] " + cYelBold + conflict.Error() + cReset)
+		waitEnter(r)
+		return nil
+	}
+
 	needReload := false
 	switch svc.Name {
 	case "openvpn":
@@ -955,7 +978,7 @@ func changeServicePort(r *bufio.Reader, svc service.Service) error {
 		// the old port stays open at every boot and a host whose INPUT
 		// policy is DROP never lets clients reach the new one.
 		// The old port stays open if another hexplus service listens there.
-		if err := firewall.MoveInput(ovpnProto(), currentPort, newPort, firewall.RCLocalPath, portclaim.HeldByOther(portclaim.OpenVPN)); err != nil {
+		if err := firewall.MoveInput(proto, currentPort, newPort, firewall.RCLocalPath, portclaim.HeldByOther(portclaim.OpenVPN)); err != nil {
 			fmt.Println("\n" + cYelBold + "คำเตือน: ย้ายกฎ INPUT ไปพอร์ตใหม่ไม่สำเร็จ ลูกค้าอาจต่อพอร์ตใหม่ไม่ได้: " + err.Error() + cReset)
 		}
 		// The spreading rules match the primary port.
@@ -984,6 +1007,19 @@ func changeServicePort(r *bufio.Reader, svc service.Service) error {
 	}
 	if err := service.Restart(svc); err != nil {
 		fmt.Println("\n" + cYelBold + "คำเตือน: รีสตาร์ทไม่สำเร็จ: " + err.Error() + cReset)
+	}
+	// systemctl restart returns before the service binds; only report
+	// success once it really listens on the new port.
+	if !waitListening(newPort, proto) {
+		fmt.Println("\n" + cRedBold + "[ผิดพลาด] " + cYelBold +
+			fmt.Sprintf("%s ไม่ขึ้นที่พอร์ต %d — ตรวจสอบ journalctl -u %s", svc.Name, newPort, svc.UnitName) + cReset)
+		waitEnter(r)
+		return nil
+	}
+	// SSL TUNNEL and SOCKS OPENVPN forward to the old port over TCP.
+	if svc.Name == "openvpn" && proto == "tcp" && newPort != currentPort {
+		fmt.Println()
+		followOpenVPNPort(currentPort, newPort)
 	}
 	fmt.Println("\n" + cGrnBold + fmt.Sprintf("เปลี่ยนพอร์ตเป็น %d สำเร็จ", newPort) + cReset)
 	waitEnter(r)
