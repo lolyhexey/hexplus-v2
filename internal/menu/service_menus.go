@@ -29,6 +29,7 @@ import (
 	"github.com/lolyhexey/hexplus/internal/ovpninstance"
 	"github.com/lolyhexey/hexplus/internal/ovpnspread"
 	"github.com/lolyhexey/hexplus/internal/pki"
+	"github.com/lolyhexey/hexplus/internal/portclaim"
 	"github.com/lolyhexey/hexplus/internal/progress"
 	"github.com/lolyhexey/hexplus/internal/service"
 	"github.com/lolyhexey/hexplus/internal/speedlimit"
@@ -1931,10 +1932,16 @@ func cleanupOpenVPN() {
 	// used to be removed, so the port stayed open and mail stayed blocked
 	// for the whole host until the next reboot; older installs also stacked
 	// duplicates, hence the loops.
-	firewall.RemoveInput(ovpnProto(), ovpnPort())
-	// Every INPUT line still in rc.local is the primary's (instances were
-	// removed first), including ports it used before a port change.
-	_ = firewall.RemovePersistedInput(rclocal)
+	// A port another hexplus service (SSLH, SSL TUNNEL, a proxy) listens on
+	// stays open for it; so does any port when server.conf cannot be read,
+	// rather than guessing 1194/tcp and closing someone else's rule.
+	keep := portclaim.HeldByOther(portclaim.OpenVPN)
+	if proto, port, err := pki.ReadServerListen(pki.ServerConfPath); err == nil && !keep(proto, port) {
+		firewall.RemoveInput(proto, port)
+	}
+	// The other INPUT lines still in rc.local are the primary's (instances
+	// were removed first), including ports it used before a port change.
+	_ = firewall.RemovePersistedInput(rclocal, keep)
 	for _, r := range smtpBlockRules {
 		for i := 0; i < 32; i++ {
 			if exec.Command("iptables", append([]string{"-D"}, r...)...).Run() != nil {
@@ -1991,8 +1998,9 @@ func cleanupOpenVPN() {
 		"iptables -A FORWARD -p tcp --dport 25 -j DROP",
 		"iptables -A FORWARD -p tcp --dport 110 -j DROP",
 	}
+	// INPUT lines are not stripped by prefix here: RemovePersistedInput
+	// above removed OpenVPN's, and the rest belong to other services.
 	cleanPrefixes = append(cleanPrefixes, firewall.RCLocalPrefixes...)
-	cleanPrefixes = append(cleanPrefixes, firewall.InputRCLocalPrefix)
 	if raw, err := os.ReadFile(rclocal); err == nil {
 		var kept []string
 		for _, line := range strings.Split(string(raw), "\n") {

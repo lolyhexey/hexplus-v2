@@ -80,11 +80,14 @@ func ParseInputRCLocalLine(line string) (proto string, port int, ok bool) {
 // oldPort and installs and persists them for newPort. Without it the old
 // port stayed open at every boot and, on a host whose INPUT policy is DROP,
 // the new port was unreachable.
-func MoveInput(proto string, oldPort, newPort int, rcLocal string) error {
+//
+// keep, when not nil, reports ports another hexplus service still listens
+// on: the old port then stays open for it.
+func MoveInput(proto string, oldPort, newPort int, rcLocal string, keep func(proto string, port int) bool) error {
 	if err := validInput(proto, newPort); err != nil {
 		return err
 	}
-	if oldPort != newPort && validInput(proto, oldPort) == nil {
+	if oldPort != newPort && validInput(proto, oldPort) == nil && (keep == nil || !keep(proto, oldPort)) {
 		RemoveInput(proto, oldPort)
 		old := InputRCLocalLine(proto, oldPort)
 		if err := RemoveRCLocalLines(rcLocal, func(l string) bool { return l == old }); err != nil {
@@ -98,10 +101,12 @@ func MoveInput(proto string, oldPort, newPort int, rcLocal string) error {
 }
 
 // RemovePersistedInput deletes, live and from rc.local, every INPUT rule an
-// rc.local line written by InputRCLocalLine names. Uninstall uses it after
-// the extra instances are gone, so what is left belongs to the primary
-// instance, including lines for ports it used before a port change.
-func RemovePersistedInput(rcLocal string) error {
+// rc.local line written by InputRCLocalLine names, except the ports keep
+// reports (another hexplus service such as SSLH or SSL TUNNEL listens
+// there). OpenVPN's uninstall uses it after the extra instances are gone,
+// so what is left of OpenVPN's belongs to the primary, including lines for
+// ports it used before a port change.
+func RemovePersistedInput(rcLocal string, keep func(proto string, port int) bool) error {
 	raw, err := os.ReadFile(rcLocal)
 	if os.IsNotExist(err) {
 		return nil
@@ -109,13 +114,41 @@ func RemovePersistedInput(rcLocal string) error {
 	if err != nil {
 		return err
 	}
+	ours := func(l string) (string, int, bool) {
+		proto, port, ok := ParseInputRCLocalLine(l)
+		return proto, port, ok && (keep == nil || !keep(proto, port))
+	}
 	for _, l := range strings.Split(string(raw), "\n") {
-		if proto, port, ok := ParseInputRCLocalLine(l); ok {
+		if proto, port, ok := ours(l); ok {
 			RemoveInput(proto, port)
 		}
 	}
 	return RemoveRCLocalLines(rcLocal, func(l string) bool {
-		_, _, ok := ParseInputRCLocalLine(l)
+		_, _, ok := ours(l)
 		return ok
 	})
+}
+
+// OpenPort opens proto/port in INPUT and persists it in rc.local, for a
+// service that listens there (SSLH, SSL TUNNEL, a proxy). On a host whose
+// INPUT policy is DROP these were unreachable: only OpenVPN opened its port.
+func OpenPort(proto string, port int, rcLocal string) error {
+	if err := ApplyInput(proto, port); err != nil {
+		return err
+	}
+	return AddRCLocalLine(rcLocal, InputRCLocalLine(proto, port))
+}
+
+// ClosePort undoes OpenPort, unless keep reports that another hexplus
+// service still listens on the port.
+func ClosePort(proto string, port int, rcLocal string, keep func(proto string, port int) bool) error {
+	if err := validInput(proto, port); err != nil {
+		return err
+	}
+	if keep != nil && keep(proto, port) {
+		return nil
+	}
+	RemoveInput(proto, port)
+	line := InputRCLocalLine(proto, port)
+	return RemoveRCLocalLines(rcLocal, func(l string) bool { return l == line })
 }

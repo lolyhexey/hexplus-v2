@@ -33,6 +33,8 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/lolyhexey/hexplus/internal/firewall"
+	"github.com/lolyhexey/hexplus/internal/portclaim"
 	"github.com/lolyhexey/hexplus/internal/progress"
 	"github.com/lolyhexey/hexplus/internal/proxy"
 	"github.com/lolyhexey/hexplus/internal/service"
@@ -493,7 +495,10 @@ func proxyRemoveEntry(r *bufio.Reader, db *proxy.DB, cfg proxy.Config) {
 			_ = systemctlRun("disable", unitName)
 			_, _, _, _ = proxy.RemoveUnit(cfg)
 			dbDelete(db, cfg.Name)
-			return db.Save()
+			if err := db.Save(); err != nil {
+				return err
+			}
+			return firewall.ClosePort("tcp", cfg.Port, firewall.RCLocalPath, portclaim.HeldByOther(portclaim.Proxy(cfg.Name)))
 		}},
 	})
 	if err != nil {
@@ -588,6 +593,9 @@ func proxyInstall(r *bufio.Reader, db *proxy.DB, s *proxySlot) error {
 		{Label: "บันทึก config + เขียน unit file", Work: func() error {
 			dbSet(db, cfg)
 			if err := db.Save(); err != nil {
+				return err
+			}
+			if err := firewall.OpenPort("tcp", cfg.Port, firewall.RCLocalPath); err != nil {
 				return err
 			}
 			_, _, reloadErr, err := proxy.WriteUnit(cfg)

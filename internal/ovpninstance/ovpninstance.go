@@ -299,9 +299,20 @@ func setupInstanceNAT(inst Instance) {
 	}
 }
 
+// InputHeldByOther reports, for the firewall helpers, whether a hexplus
+// service other than self still listens on a port. internal/portclaim sets
+// it; nil means no other service is known.
+var InputHeldByOther func(self string) func(proto string, port int) bool
+
 func removeInstanceNAT(inst Instance) {
 	_, _ = DeleteMasquerade(inst.Subnet()) // best effort, like the rest of Remove
 	unpersistRCLocal("iptables -t nat -A POSTROUTING -s " + inst.Subnet() + " -j MASQUERADE")
+	if inst.Worker {
+		return // a worker's port was never opened
+	}
+	if InputHeldByOther != nil && InputHeldByOther("openvpn-"+strconv.Itoa(inst.ID))(inst.Proto, inst.Port) {
+		return
+	}
 	firewall.RemoveInput(inst.Proto, inst.Port)
 	unpersistRCLocal(firewall.InputRCLocalLine(inst.Proto, inst.Port))
 }

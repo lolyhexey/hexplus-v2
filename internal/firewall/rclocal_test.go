@@ -72,7 +72,7 @@ func TestMoveInput(t *testing.T) {
 	c := useChain(t, "-p udp --dport 1194 -j ACCEPT", "-j REJECT")
 	rc := writeRC(t, "#!/bin/sh -e\n"+InputRCLocalLine("udp", 1194)+"\nexit 0\n")
 
-	if err := MoveInput("udp", 1194, 1195, rc); err != nil {
+	if err := MoveInput("udp", 1194, 1195, rc, nil); err != nil {
 		t.Fatal(err)
 	}
 	if want := []string{"-p udp --dport 1195 -j ACCEPT", "-j REJECT"}; !reflect.DeepEqual(c.rules, want) {
@@ -87,7 +87,7 @@ func TestMoveInput(t *testing.T) {
 func TestMoveInputSamePortAndFreshHost(t *testing.T) {
 	c := useChain(t)
 	rc := filepath.Join(t.TempDir(), "rc.local") // does not exist yet
-	if err := MoveInput("tcp", 443, 443, rc); err != nil {
+	if err := MoveInput("tcp", 443, 443, rc, nil); err != nil {
 		t.Fatal(err)
 	}
 	if want := []string{"-p tcp --dport 443 -j ACCEPT"}; !reflect.DeepEqual(c.rules, want) {
@@ -96,7 +96,7 @@ func TestMoveInputSamePortAndFreshHost(t *testing.T) {
 	if got := readRC(t, rc); !strings.Contains(got, InputRCLocalLine("tcp", 443)) || !strings.HasSuffix(got, "exit 0\n") {
 		t.Errorf("rc.local:\n%s", got)
 	}
-	if err := MoveInput("tcp", 443, 0, rc); err == nil {
+	if err := MoveInput("tcp", 443, 0, rc, nil); err == nil {
 		t.Error("an invalid new port was accepted")
 	}
 }
@@ -110,7 +110,7 @@ func TestRemovePersistedInput(t *testing.T) {
 		InputRCLocalLine("udp", 1300)+"\n"+
 		"exit 0\n")
 
-	if err := RemovePersistedInput(rc); err != nil {
+	if err := RemovePersistedInput(rc, nil); err != nil {
 		t.Fatal(err)
 	}
 	if want := []string{"-p tcp --dport 22 -j ACCEPT"}; !reflect.DeepEqual(c.rules, want) {
