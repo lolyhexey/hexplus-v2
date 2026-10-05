@@ -129,7 +129,9 @@ func Uninstall() error {
 	// the binary UninstallService deletes below. Remove them completely
 	// first: Remove needs systemctl, iptables and the registry. Spread
 	// workers are not touched here; ovpnspread.Disable takes them down.
-	_ = ovpninstance.RemoveExtras()
+	if err := ovpninstance.RemoveExtras(); err != nil {
+		fmt.Fprintln(os.Stderr, "warning: extra OpenVPN ports not fully removed:", err)
+	}
 	for _, svc := range service.All() {
 		_, _ = service.UninstallService(svc)
 	}
@@ -140,7 +142,9 @@ func Uninstall() error {
 	// The CPU-spreading rules call the binary from rc.local and redirect
 	// the OpenVPN port, and the workers run the OpenVPN binary about to be
 	// deleted; none of them may outlive hexplus.
-	_ = ovpnspread.Disable(func(string, ...any) {})
+	if err := ovpnspread.Disable(func(string, ...any) {}); err != nil {
+		fmt.Fprintln(os.Stderr, "warning: OpenVPN CPU spreading not fully removed:", err)
+	}
 
 	// Remove the menu shortcut first — but only if it's actually our symlink
 	// pointing at SelfPath. We don't want to clobber an operator's own /menu

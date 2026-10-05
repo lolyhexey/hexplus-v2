@@ -73,8 +73,8 @@ func TestEnsureMasqueradeDoesNotStack(t *testing.T) {
 // Uninstall deleted one copy and left the rest live.
 func TestDeleteMasqueradeRemovesEveryCopyOfThatSubnetOnly(t *testing.T) {
 	f := useFakeNat(t, rule8, rule9, rule8, rule8)
-	if n := DeleteMasquerade("10.8.0.0/16"); n != 3 {
-		t.Errorf("deleted %d, want 3", n)
+	if n, err := DeleteMasquerade("10.8.0.0/16"); n != 3 || err != nil {
+		t.Errorf("deleted %d (%v), want 3", n, err)
 	}
 	if want := []string{rule9}; !reflect.DeepEqual(f.rules, want) {
 		t.Errorf("rules = %v, want %v", f.rules, want)
@@ -83,8 +83,8 @@ func TestDeleteMasqueradeRemovesEveryCopyOfThatSubnetOnly(t *testing.T) {
 
 func TestDeleteMasqueradeWhenAbsent(t *testing.T) {
 	f := useFakeNat(t, rule9)
-	if n := DeleteMasquerade("10.8.0.0/16"); n != 0 {
-		t.Errorf("deleted %d, want 0", n)
+	if n, err := DeleteMasquerade("10.8.0.0/16"); n != 0 || err != nil {
+		t.Errorf("deleted %d (%v), want 0", n, err)
 	}
 	if want := []string{rule9}; !reflect.DeepEqual(f.rules, want) {
 		t.Errorf("rules = %v, want %v", f.rules, want)
@@ -97,7 +97,7 @@ func TestDeleteMasqueradeIsBounded(t *testing.T) {
 	old := iptablesRun
 	iptablesRun = func(args ...string) ([]byte, error) { calls++; return nil, nil }
 	t.Cleanup(func() { iptablesRun = old })
-	if n := DeleteMasquerade("10.8.0.0/16"); n != maxMasqueradeCopies || calls != maxMasqueradeCopies {
+	if n, _ := DeleteMasquerade("10.8.0.0/16"); n != maxMasqueradeCopies || calls != maxMasqueradeCopies {
 		t.Errorf("deleted %d with %d calls, want %d", n, calls, maxMasqueradeCopies)
 	}
 }
@@ -111,5 +111,36 @@ func TestEnsureMasqueradeReportsIptablesOutput(t *testing.T) {
 	err := EnsureMasquerade("10.8.0.0/16")
 	if err == nil || !strings.Contains(err.Error(), "exit status 4 Another app is currently holding the xtables lock") {
 		t.Errorf("err = %v", err)
+	}
+}
+
+// A held xtables lock (exit 4) is not "rule absent": -C must not fall
+// through to -A (that stacked the rule once the lock freed), and -D must
+// report the failure instead of claiming there was nothing to delete.
+func TestMasqueradeDistinguishesTheXtablesLockFromAbsence(t *testing.T) {
+	locked := true
+	f := useFakeNat(t, rule8)
+	inner := iptablesRun
+	iptablesRun = func(args ...string) ([]byte, error) {
+		if locked {
+			f.calls = append(f.calls, strings.Join(args, " "))
+			return []byte("Another app is currently holding the xtables lock."), errors.New("exit status 4")
+		}
+		return inner(args...)
+	}
+	if err := EnsureMasquerade("10.8.0.0/16"); err == nil {
+		t.Error("EnsureMasquerade ignored the lock")
+	}
+	for _, c := range f.calls {
+		if strings.Contains(c, " -A ") {
+			t.Errorf("appended while the lock was held: %s", c)
+		}
+	}
+	if n, err := DeleteMasquerade("10.8.0.0/16"); n != 0 || err == nil {
+		t.Errorf("DeleteMasquerade = %d, %v; want 0 and the lock error", n, err)
+	}
+	locked = false
+	if n, err := DeleteMasquerade("10.8.0.0/16"); n != 1 || err != nil {
+		t.Errorf("after the lock: %d, %v", n, err)
 	}
 }
