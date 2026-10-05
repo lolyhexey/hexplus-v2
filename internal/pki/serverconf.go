@@ -1,8 +1,11 @@
 package pki
 
 import (
+	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/lolyhexey/hexplus/internal/atomicfile"
@@ -157,6 +160,81 @@ func ensureAuthScriptAt(path string) error {
 		return nil
 	}
 	return atomicfile.Write(path, []byte(authScript), 0o700)
+}
+
+// pamPluginLine matches the line releases up to v2.1.5 wrote instead of
+// auth-user-pass-verify when openvpn-plugin-auth-pam.so existed on the host.
+var pamPluginLine = regexp.MustCompile(`^plugin\s+\S*openvpn-plugin-auth-pam\.so\s+login$`)
+
+// repairPluginConf replaces that plugin line with the hexplus-auth.sh
+// directives (adding only the ones the config lacks) and reports whether it
+// changed anything. Any other plugin line is the operator's and left alone.
+func repairPluginConf(conf string) (string, bool) {
+	lines := strings.Split(conf, "\n")
+	has := func(directive string) bool {
+		for _, l := range lines {
+			if f := strings.Fields(l); len(f) > 0 && f[0] == directive {
+				return true
+			}
+		}
+		return false
+	}
+	var out []string
+	changed := false
+	for _, l := range lines {
+		if !pamPluginLine.MatchString(strings.TrimSpace(l)) {
+			out = append(out, l)
+			continue
+		}
+		if !changed {
+			if !has("script-security") {
+				out = append(out, "script-security 2")
+			}
+			if !has("auth-user-pass-verify") {
+				out = append(out, "auth-user-pass-verify "+AuthScriptPath+" via-file")
+			}
+		}
+		changed = true
+	}
+	return strings.Join(out, "\n"), changed
+}
+
+// RepairPluginConfs fixes every /etc/openvpn/server*.conf an older release
+// wrote with the PAM plugin line. The embedded OpenVPN is built without
+// plugin support and refuses to start with it, so those instances have been
+// down since they were installed; the same releases never wrote
+// hexplus-auth.sh either, so it is written here too. It returns the configs
+// it changed; their units need a (re)start.
+func RepairPluginConfs() ([]string, error) { return repairPluginConfsIn(OpenVPNDir, AuthScriptPath) }
+
+func repairPluginConfsIn(dir, script string) ([]string, error) {
+	confs, err := filepath.Glob(filepath.Join(dir, "server*.conf"))
+	if err != nil {
+		return nil, err
+	}
+	var fixed []string
+	var errs []error
+	for _, path := range confs {
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		out, changed := repairPluginConf(string(raw))
+		if !changed {
+			continue
+		}
+		if err := atomicfile.Write(script, []byte(authScript), 0o700); err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		if err := atomicfile.Write(path, []byte(out), 0o644); err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		fixed = append(fixed, path)
+	}
+	return fixed, errors.Join(errs...)
 }
 
 // WriteServerConf overwrites /etc/openvpn/server.conf with the operator's
