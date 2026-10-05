@@ -28,6 +28,7 @@ import (
 	"path/filepath"
 
 	"github.com/lolyhexey/hexplus/internal/ovpnguard"
+	"github.com/lolyhexey/hexplus/internal/ovpninstance"
 	"github.com/lolyhexey/hexplus/internal/ovpnspread"
 	"github.com/lolyhexey/hexplus/internal/paths"
 	"github.com/lolyhexey/hexplus/internal/service"
@@ -110,7 +111,8 @@ func Install() (Result, error) {
 // through service.UninstallService(svc) loops; this function owns
 // only the wrapper-side state. Configs under /etc are preserved on
 // purpose so the operator can reinstall without losing their
-// squid.conf / server.conf edits.
+// squid.conf / server.conf edits. The extra OpenVPN ports are the
+// exception: their units, configs and registry entries are removed.
 func Uninstall() error {
 	if os.Geteuid() != 0 {
 		return errors.New("uninstall requires root; rerun under sudo")
@@ -123,6 +125,11 @@ func Uninstall() error {
 	// Before OpenVPN stops: the speed shaper's ifb devices from older
 	// releases are only recognisable through their live tun devices.
 	_ = speedlimit.Teardown()
+	// The extra OpenVPN ports are not in service.All(), yet their units run
+	// the binary UninstallService deletes below. Remove them completely
+	// first: Remove needs systemctl, iptables and the registry. Spread
+	// workers are not touched here; ovpnspread.Disable takes them down.
+	_ = ovpninstance.RemoveExtras()
 	for _, svc := range service.All() {
 		_, _ = service.UninstallService(svc)
 	}

@@ -48,7 +48,7 @@ type Limits map[string]int
 // "mbps=N" form is read as MainKey for backward compatibility.
 func LoadAll() Limits {
 	out := Limits{}
-	data, err := os.ReadFile(ConfPath)
+	data, err := os.ReadFile(confPath)
 	if err != nil {
 		return out
 	}
@@ -92,7 +92,7 @@ func SetLimit(key string, mbps int) error {
 		limits[key] = mbps
 	}
 	if len(limits) == 0 {
-		if err := os.Remove(ConfPath); err != nil && !os.IsNotExist(err) {
+		if err := os.Remove(confPath); err != nil && !os.IsNotExist(err) {
 			return err
 		}
 		return StripServerConf()
@@ -106,9 +106,19 @@ func SetLimit(key string, mbps int) error {
 	return InjectServerConf()
 }
 
+// Forget drops one instance's cap, if it has one. An instance's key is its
+// ID and IDs are reused, so a cap left behind by a removed instance would
+// silently apply to the next one that takes the ID.
+func Forget(key string) error {
+	if LoadFor(key) == 0 {
+		return nil
+	}
+	return SetLimit(key, 0)
+}
+
 // DisableAll clears every cap and strips the learn-address hooks.
 func DisableAll() error {
-	if err := os.Remove(ConfPath); err != nil && !os.IsNotExist(err) {
+	if err := os.Remove(confPath); err != nil && !os.IsNotExist(err) {
 		return err
 	}
 	return StripServerConf()
@@ -126,17 +136,21 @@ func writeConf(limits Limits) error {
 	for _, k := range keys {
 		fmt.Fprintf(&b, "%s=%d\n", k, limits[k])
 	}
-	return os.WriteFile(ConfPath, []byte(b.String()), 0o644)
+	return os.WriteFile(confPath, []byte(b.String()), 0o644)
 }
 
 func deployScript() error {
-	return atomicfile.Write(ScriptPath, []byte(learnAddressScript), 0o755)
+	return atomicfile.Write(scriptPath, []byte(learnAddressScript), 0o755)
 }
+
+// serverConfGlob matches the server configs that carry the hook (a test
+// points it at a temp dir).
+var serverConfGlob = "/etc/openvpn/server*.conf"
 
 // serverConfs returns every OpenVPN server config the shaper should hook:
 // the primary server.conf plus every extra-instance server<N>.conf.
 func serverConfs() []string {
-	matches, _ := filepath.Glob("/etc/openvpn/server*.conf")
+	matches, _ := filepath.Glob(serverConfGlob)
 	return matches
 }
 
