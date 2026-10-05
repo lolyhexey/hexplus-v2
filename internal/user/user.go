@@ -68,6 +68,13 @@ func Add(in AddInput, ovpnIn OVPNInput) (AddResult, error) {
 		return res, err
 	}
 
+	// Resolve the endpoint before anything is created, so an unreadable
+	// server.conf leaves no system user or client cert behind.
+	ovpnIn, err = ResolveEndpoint(ovpnIn, pki.ServerConfPath)
+	if err != nil {
+		return res, err
+	}
+
 	// Compute expiry. Now+N days, then truncate to start-of-day so the
 	// stored value matches what useradd -e sees.
 	var expiresAt time.Time
@@ -180,6 +187,10 @@ func List() ([]Record, error) {
 // re-builds the .ovpn. Used when the seller needs to re-send the
 // config after creation.
 func Export(name string, ovpnIn OVPNInput) ([]byte, error) {
+	ovpnIn, err := ResolveEndpoint(ovpnIn, pki.ServerConfPath)
+	if err != nil {
+		return nil, err
+	}
 	ovpnIn.Username = name
 	return BuildOVPN(ovpnIn)
 }

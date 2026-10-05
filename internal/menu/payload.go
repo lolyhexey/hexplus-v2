@@ -2,7 +2,8 @@
 // sub-menu.
 //
 // What this does: regenerates one existing user's .ovpn under a new
-// `remote <portal-host> 1194 udp` line so an injector app (HTTP
+// `remote <portal-host> <port> <proto>` line (the port and proto the
+// server really listens on, read from server.conf) so an injector app (HTTP
 // Injector, KPN Tunnel, eProxy) sees the configured carrier portal as
 // the OpenVPN endpoint. The certs and crypto bundle are untouched - we
 // only rewrite the `remote` line. The output goes to
@@ -24,6 +25,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/lolyhexey/hexplus/internal/pki"
 	"github.com/lolyhexey/hexplus/internal/user"
 )
 
@@ -144,8 +146,11 @@ func runPayload(r *bufio.Reader) error {
 		return fmt.Errorf("อ่าน %s: %w", srcPath, err)
 	}
 
-	patched, replaced := rewriteRemote(src, remoteHost, 1194, "udp")
-	if !replaced {
+	patched, proto, port, err := patchPayload(src, remoteHost, pki.ServerConfPath)
+	if err != nil {
+		return err
+	}
+	if patched == nil {
 		return fmt.Errorf("ไม่พบบรรทัด 'remote ...' ใน %s", srcPath)
 	}
 
@@ -156,9 +161,25 @@ func runPayload(r *bufio.Reader) error {
 
 	fmt.Println()
 	fmt.Println(cGrnBold + "บันทึก " + cWhtBold + dstPath + cGrnBold + " สำเร็จ" + cReset)
-	fmt.Println(cWhtBold + "  remote: " + cYelBold + remoteHost + " 1194 udp" + cReset)
+	fmt.Println(cWhtBold + "  remote: " + cYelBold + remoteHost + fmt.Sprintf(" %d %s", port, proto) + cReset)
 	waitEnter(r)
 	return nil
+}
+
+// patchPayload points src's `remote` line at host with the port and proto
+// the server config at confPath listens on. It returns nil bytes when src
+// has no `remote` line, and an error (before anything is written) when the
+// server config cannot be read.
+func patchPayload(src []byte, host, confPath string) (patched []byte, proto string, port int, err error) {
+	proto, port, err = pki.ReadServerListen(confPath)
+	if err != nil {
+		return nil, "", 0, fmt.Errorf("อ่าน %s: %w", confPath, err)
+	}
+	out, replaced := rewriteRemote(src, host, port, proto)
+	if !replaced {
+		return nil, proto, port, nil
+	}
+	return out, proto, port, nil
 }
 
 // rewriteRemote replaces the first non-comment `remote <host> <port>

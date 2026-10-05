@@ -129,3 +129,71 @@ func TestSetDuplicateCN(t *testing.T) {
 		t.Error("a missing file reads as on")
 	}
 }
+
+func writeConf(t *testing.T, body string) string {
+	t.Helper()
+	p := filepath.Join(t.TempDir(), "server.conf")
+	if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+func TestReadServerListen(t *testing.T) {
+	cases := []struct {
+		name, conf, proto string
+		port              int
+	}{
+		{"menu install default", "port 443\nproto tcp\n", "tcp", 443},
+		{"missing directives use openvpn defaults", "dev tun\n", "udp", 1194},
+		{"ipv6 udp", "proto udp6\n", "udp", 1194},
+		{"tcp-server", "proto tcp-server\nport 8443\n", "tcp", 8443},
+		{"tcp6", "port 443\nproto tcp6\n", "tcp", 443},
+		{"commented lines ignored", "#port 9999\n;port 8888\n# proto tcp\nport 443\n", "udp", 443},
+		{"last directive wins", "port 1194\nproto udp\nport 443\nproto tcp\n", "tcp", 443},
+		{"bad port keeps default", "port abc\n", "udp", 1194},
+		{"out of range port keeps earlier", "port 443\nport 70000\n", "udp", 443},
+		{"tabs, spaces and CRLF", "port\t 443 \r\nproto   tcp\r\n", "tcp", 443},
+		{"trailing comment", "port 443 # public\nproto tcp\n", "tcp", 443},
+		{"pki init default", defaultServerConf, "tcp", 1194},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			proto, port, err := ReadServerListen(writeConf(t, c.conf))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if proto != c.proto || port != c.port {
+				t.Errorf("got %s/%d, want %s/%d", proto, port, c.proto, c.port)
+			}
+		})
+	}
+}
+
+func TestReadServerListenMissingFile(t *testing.T) {
+	if _, _, err := ReadServerListen(filepath.Join(t.TempDir(), "nope.conf")); err == nil {
+		t.Fatal("expected an error for a missing config, got nil")
+	}
+}
+
+// The client file must dial what the server listens on: a 443/tcp server
+// used to get "proto udp" and "remote H 1194".
+func TestClientHeaderMatchesServer(t *testing.T) {
+	proto, port, err := ReadServerListen(writeConf(t, "port 443\nproto tcp\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	hdr, err := RenderClientCommon(ClientConfigInput{RemoteHost: "203.0.113.7", RemotePort: port, Proto: proto})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(hdr)
+	for _, want := range []string{"proto tcp", "remote 203.0.113.7 443"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing %q in:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "1194") || strings.Contains(got, "proto udp") {
+		t.Errorf("header still carries the legacy endpoint:\n%s", got)
+	}
+}

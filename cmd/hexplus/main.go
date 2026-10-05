@@ -501,14 +501,22 @@ func runUser(args []string) {
 	}
 }
 
+// endpointFlags registers --remote-port and --proto. Both default to unset
+// (0, ""): user.Add and user.Export then read the server's real port and
+// proto from server.conf, and only an explicit flag overrides it.
+func endpointFlags(fs *flag.FlagSet) (remotePort *int, proto *string) {
+	remotePort = fs.Int("remote-port", 0, "port for the .ovpn (default: read from "+pki.ServerConfPath+")")
+	proto = fs.String("proto", "", "udp|tcp for the .ovpn (default: read from "+pki.ServerConfPath+")")
+	return remotePort, proto
+}
+
 func runUserAdd(args []string) {
 	fs := flag.NewFlagSet("user add", flag.ExitOnError)
 	pw := fs.String("password", "", "user password (required)")
 	expDays := fs.Int("expire-days", 0, "days until the account expires (0 = no expiry)")
 	limit := fs.Int("limit", 0, "max concurrent connections (0 = no enforced cap)")
 	remoteHost := fs.String("remote", "", "OpenVPN server's public address for the .ovpn (defaults to /etc/IP if present, else 127.0.0.1)")
-	remotePort := fs.Int("remote-port", 1194, "OpenVPN server port for the .ovpn")
-	proto := fs.String("proto", "udp", "OpenVPN proto (udp|tcp)")
+	remotePort, proto := endpointFlags(fs)
 	outFile := fs.String("out", "", "write the .ovpn to this path (default: /root/<name>.ovpn)")
 	rest, err := parseFlagsAnywhere(fs, args)
 	if err != nil {
@@ -598,8 +606,7 @@ func runUserRemove(args []string) {
 func runUserExport(args []string) {
 	fs := flag.NewFlagSet("user export", flag.ExitOnError)
 	remoteHost := fs.String("remote", "", "OpenVPN server's public address (defaults like 'user add')")
-	remotePort := fs.Int("remote-port", 1194, "OpenVPN server port")
-	proto := fs.String("proto", "udp", "OpenVPN proto (udp|tcp)")
+	remotePort, proto := endpointFlags(fs)
 	outFile := fs.String("out", "", "write to this path (default: stdout)")
 	rest, err := parseFlagsAnywhere(fs, args)
 	if err != nil {
