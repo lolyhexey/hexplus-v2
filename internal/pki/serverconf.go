@@ -368,3 +368,37 @@ verb 3%s
 
 	return os.WriteFile(fmt.Sprintf("%s/server%d.conf", OpenVPNDir, id), []byte(conf), 0o644)
 }
+
+// HasDuplicateCN reports whether the OpenVPN config at path allows several
+// sessions per user (MULTILOGIN on). A missing file reads as false.
+func HasDuplicateCN(path string) bool {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	for _, l := range strings.Split(string(raw), "\n") {
+		if strings.TrimSpace(l) == "duplicate-cn" {
+			return true
+		}
+	}
+	return false
+}
+
+// SetDuplicateCN adds or removes the duplicate-cn line in the OpenVPN config
+// at path. The daemon reads it only at start, so the caller restarts it.
+func SetDuplicateCN(path string, on bool) error {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	var kept []string
+	for _, l := range strings.Split(strings.TrimRight(string(raw), "\n"), "\n") {
+		if strings.TrimSpace(l) != "duplicate-cn" {
+			kept = append(kept, l)
+		}
+	}
+	if on {
+		kept = append(kept, "duplicate-cn")
+	}
+	return atomicfile.Write(path, []byte(strings.Join(kept, "\n")+"\n"), 0o644)
+}

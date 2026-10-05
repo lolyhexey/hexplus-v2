@@ -6,7 +6,7 @@ import (
 	"fmt"
 
 	"github.com/lolyhexey/hexplus/internal/ovpnguard"
-	"github.com/lolyhexey/hexplus/internal/ovpninstance"
+	"github.com/lolyhexey/hexplus/internal/ovpnspread"
 	"github.com/lolyhexey/hexplus/internal/service"
 )
 
@@ -57,6 +57,9 @@ func toggleDeviceLimit(r *bufio.Reader, primary service.Service) {
 		fmt.Println(cGrnBold + "เปิดการจำกัดจำนวนอุปกรณ์แล้ว" + cReset)
 	default:
 		fmt.Println(cGrnBold + "ปิดการจำกัดจำนวนอุปกรณ์แล้ว" + cReset)
+		if ovpnspread.Enabled() && !ovpnConfContains("duplicate-cn") {
+			fmt.Println(cYelBold + "หมายเหตุ: กระจายโหลดเปิดอยู่ ผู้ใช้หนึ่งคนจึงต่อได้สูงสุด 1 เครื่องต่อ process (ไม่ใช่ 1 เครื่องรวม)" + cReset)
+		}
 	}
 	waitEnter(r)
 }
@@ -113,8 +116,9 @@ func restartAllOpenVPN(primary service.Service) error {
 	if err := service.Restart(primary); err != nil {
 		errs = append(errs, err)
 	}
-	insts, _ := ovpninstance.List()
-	for _, inst := range insts {
+	// Spread workers restart with the primary (PartOf); only the
+	// operator's extra ports need their own restart.
+	for _, inst := range listExtraInstances() {
 		if err := service.Restart(inst.Service()); err != nil {
 			errs = append(errs, err)
 		}

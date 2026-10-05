@@ -102,3 +102,30 @@ func TestRepairPluginConfsIn(t *testing.T) {
 		t.Errorf("second run fixed %v again", fixed)
 	}
 }
+
+func TestSetDuplicateCN(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "server2.conf")
+	if err := os.WriteFile(path, []byte("port 1\nduplicate-cn\nverb 3\nduplicate-cn\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if !HasDuplicateCN(path) {
+		t.Fatal("not detected")
+	}
+	if err := SetDuplicateCN(path, false); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(path); string(b) != "port 1\nverb 3\n" || HasDuplicateCN(path) {
+		t.Errorf("after off: %q", b)
+	}
+	for i := 0; i < 2; i++ {
+		if err := SetDuplicateCN(path, true); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if b, _ := os.ReadFile(path); string(b) != "port 1\nverb 3\nduplicate-cn\n" {
+		t.Errorf("after on twice: %q", b)
+	}
+	if HasDuplicateCN(filepath.Join(t.TempDir(), "missing.conf")) {
+		t.Error("a missing file reads as on")
+	}
+}

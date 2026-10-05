@@ -82,6 +82,8 @@ func main() {
 		runXray(rest)
 	case "ovpnguard":
 		runOVPNGuard(rest)
+	case "ovpnspread":
+		runOVPNSpread(rest)
 	case "help", "-h", "--help":
 		printUsage(os.Stdout)
 	default:
@@ -123,6 +125,7 @@ Subcommands:
   panel <verb> [flags]   V2Ray web panel (install/uninstall/serve/show/reset-password/port)
   xray <verb>            xray-core control hook for the panel (reload)
   ovpnguard <verb>       OpenVPN device limit guard (run, once, kick <name>)
+  ovpnspread <verb>      OpenVPN CPU spreading rules (apply, status)
   extract              dev-only: extract embedded assets to --lib-dir without installing
   version              print version metadata
   help                 this message

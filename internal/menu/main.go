@@ -15,6 +15,7 @@ import (
 	"strings"
 	"unicode"
 
+	"github.com/lolyhexey/hexplus/internal/ovpnspread"
 	"github.com/lolyhexey/hexplus/internal/pki"
 	"github.com/lolyhexey/hexplus/internal/speedlimit"
 )
@@ -56,6 +57,11 @@ func Run() error {
 	// Best effort: a failure only means an older script keeps running.
 	_ = speedlimit.EnsureScript()
 	_ = pki.EnsureAuthScript()
+	// Rebuild the CPU-spreading rules if workers exist, e.g. after an
+	// interrupted enable or iptables flushed by another tool.
+	if ovpnspread.Enabled() {
+		_ = ovpnspread.Apply()
+	}
 	r := bufio.NewReader(os.Stdin)
 	repairPluginConfs(r)
 	for {

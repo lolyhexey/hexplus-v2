@@ -17,6 +17,7 @@ menu
 
 ### จัดการผู้ใช้
 - สร้าง/ลบ SSH user พร้อม password, วันหมดอายุ, และ limit จำนวนอุปกรณ์
+- กระจายโหลด OpenVPN ทุก CPU (เมนู OpenVPN → [11], ปิดไว้เป็นค่าเริ่มต้น): OpenVPN 2.5 ใช้ได้ 1 core ต่อ process จึงเพิ่ม process เสริมบนพอร์ตภายใน แล้วให้ iptables `REDIRECT` แบ่งการเชื่อมต่อใหม่ของพอร์ตหลัก (ทั้งที่ต่อตรงและที่มาทาง SSL TUNNEL / SSLH / proxy ซึ่งส่งต่อมา `127.0.0.1:<พอร์ตหลัก>`) ให้ทุก process เท่า ๆ กัน `.ovpn` ไม่ต้องเปลี่ยน (`hexplus ovpnspread apply|status`)
 - บังคับ limit จำนวนอุปกรณ์ของ OpenVPN (เมนู OpenVPN → [10], ปิดไว้เป็นค่าเริ่มต้น): service `hexplus-ovpnguard` ตรวจทุก ~15 วินาที ตัดเครื่องที่ต่อนานที่สุดเมื่อเกิน และตัดบัญชีที่ถูกลบ/หมดอายุ (`hexplus ovpnguard run|once|kick <name>`)
 - export `.ovpn` อัตโนมัติเมื่อสร้าง user (อ่าน proto/port จาก server.conf จริง)
 - built-in file server (port 82) เพื่อแจก `.ovpn` ผ่าน HTTP link
