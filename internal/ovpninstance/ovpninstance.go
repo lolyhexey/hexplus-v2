@@ -178,6 +178,11 @@ func add(port int, proto string, dnsPush []string, worker bool) (Instance, error
 	}
 	inst := Instance{ID: nextID(list), Port: port, Proto: proto, Worker: worker}
 
+	// A cap left under this ID by an instance removed before Remove cleared
+	// it (or by hand) would otherwise apply to the new port.
+	if err := speedlimit.Forget(strconv.Itoa(inst.ID)); err != nil {
+		return Instance{}, err
+	}
 	if err := pki.WriteInstanceConf(inst.ID, port, proto, dnsPush); err != nil {
 		return Instance{}, err
 	}
@@ -233,10 +238,36 @@ func Remove(id int) error {
 	_ = os.Remove(fmt.Sprintf("/var/log/openvpn-status%d.log", inst.ID))
 	_ = os.Remove(ovpnguard.SocketPath(strconv.Itoa(inst.ID)))
 	removeInstanceNAT(inst)
+	// The speed cap is keyed by the ID, which the next Add reuses. After the
+	// conf is gone, so rewriting the hooks does not touch the dying instance.
+	limitErr := speedlimit.Forget(strconv.Itoa(inst.ID))
 
 	list = append(list[:idx], list[idx+1:]...)
-	return saveRegistry(list)
+	return errors.Join(limitErr, saveRegistry(list))
 }
+
+// RemoveExtras removes every operator-added port. Spread workers stay: they
+// are ovpnspread.Disable's, which keeps them when it cannot take down the
+// rules that redirect connections to them.
+func RemoveExtras() error {
+	list, err := listInstances()
+	if err != nil {
+		return err
+	}
+	var errs []error
+	for _, inst := range Extras(list) {
+		if err := removeInstance(inst.ID); err != nil {
+			errs = append(errs, fmt.Errorf("#%d: %w", inst.ID, err))
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// Overridable for tests.
+var (
+	listInstances  = List
+	removeInstance = Remove
+)
 
 // setupInstanceNAT adds the MASQUERADE rule for the instance subnet and
 // persists it in rc.local — same pattern setupNetworking uses for the
