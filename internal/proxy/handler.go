@@ -27,7 +27,6 @@ import (
 	"log"
 	"net"
 	"strings"
-	"sync"
 	"time"
 )
 
@@ -93,8 +92,11 @@ func NewHandler(cfg Config) (*Handler, error) {
 }
 
 // Serve runs the accept loop until ctx is done or the listener errors
-// fatally. Each accepted connection runs handleConn in its own
-// goroutine; cancellation propagates via ctx.
+// fatally. Each accepted connection runs handleConn in its own goroutine.
+// It returns as soon as the listener is closed, without waiting for live
+// sessions: they end when the process exits, as in SSL TUNNEL and SSLH.
+// Waiting held a stop or restart (the listener already closed) until the
+// last client disconnected or systemd killed the unit 90 s later.
 func (h *Handler) Serve(ctx context.Context) error {
 	addr := fmt.Sprintf(":%d", h.cfg.Port)
 	lc := net.ListenConfig{KeepAlive: 30 * time.Second}
@@ -110,12 +112,10 @@ func (h *Handler) Serve(ctx context.Context) error {
 		_ = ln.Close()
 	}()
 
-	var wg sync.WaitGroup
 	for {
 		client, err := ln.Accept()
 		if err != nil {
 			if errors.Is(err, net.ErrClosed) || ctx.Err() != nil {
-				wg.Wait()
 				return nil
 			}
 			// Transient accept errors (EMFILE, etc.) - back off briefly
@@ -125,14 +125,9 @@ func (h *Handler) Serve(ctx context.Context) error {
 				time.Sleep(20 * time.Millisecond)
 				continue
 			}
-			wg.Wait()
 			return fmt.Errorf("accept: %w", err)
 		}
-		wg.Add(1)
-		go func(c net.Conn) {
-			defer wg.Done()
-			h.handleConn(c)
-		}(client)
+		go h.handleConn(client)
 	}
 }
 
