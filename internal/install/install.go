@@ -30,6 +30,7 @@ import (
 	"github.com/lolyhexey/hexplus/internal/ovpnguard"
 	"github.com/lolyhexey/hexplus/internal/paths"
 	"github.com/lolyhexey/hexplus/internal/service"
+	"github.com/lolyhexey/hexplus/internal/speedlimit"
 )
 
 // Re-export the legacy names so callers that already use install.LibDir etc.
@@ -118,6 +119,9 @@ func Uninstall() error {
 	// are logged but don't stop the overall uninstall - we want the
 	// wrapper to come down even if a half-broken systemd setup blocks
 	// individual service teardown.
+	// Before OpenVPN stops: the speed shaper's ifb devices from older
+	// releases are only recognisable through their live tun devices.
+	_ = speedlimit.Teardown()
 	for _, svc := range service.All() {
 		_, _ = service.UninstallService(svc)
 	}

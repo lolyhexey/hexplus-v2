@@ -28,6 +28,7 @@ import (
 	"github.com/lolyhexey/hexplus/internal/paths"
 	"github.com/lolyhexey/hexplus/internal/pki"
 	"github.com/lolyhexey/hexplus/internal/service"
+	"github.com/lolyhexey/hexplus/internal/speedlimit"
 )
 
 // RegistryPath persists the instance list as JSON.
@@ -169,6 +170,8 @@ func Remove(id int) error {
 	}
 	inst := list[idx]
 
+	// While tun<id> still exists (see speedlimit.ReleaseTun).
+	_ = speedlimit.ReleaseTun(fmt.Sprintf("tun%d", inst.ID))
 	_ = exec.Command("systemctl", "disable", "--now", inst.UnitName()).Run()
 	_ = service.RemoveUnitFor(inst.svc())
 	_ = os.Remove(inst.ConfPath())

@@ -845,6 +845,12 @@ func openvpnMenu(r *bufio.Reader, svc service.Service) error {
 			paintTitleBar("             ลบ OPENVPN              ")
 			fmt.Println()
 			if err := progress.Run([]progress.Step{
+				{Label: "ลบการจำกัดความเร็ว", Work: func() error {
+					// First, while the tun devices still exist: they are
+					// how ifb devices from older releases are recognised.
+					_ = speedlimit.Teardown()
+					return nil
+				}},
 				{Label: "ลบพอร์ตเพิ่มเติมทั้งหมด", Work: func() error {
 					// Tear extra instances down BEFORE /etc/openvpn is
 					// removed — Remove() needs the registry that lives there,

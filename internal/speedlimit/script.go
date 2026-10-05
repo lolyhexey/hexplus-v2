@@ -28,6 +28,7 @@ PATH="${PATH:+$PATH:}/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bi
 export PATH
 
 CONF=/etc/openvpn/hexplus-speedlimit.conf
+IFB_STATE="${HEXPLUS_IFB_STATE:-/var/lib/hexplus/speedlimit-ifb}"
 DEV="${dev:-}"
 
 # OpenVPN runs 'delete' with an EMPTY environment (multi.c calls
@@ -96,8 +97,9 @@ ensure_qdisc() {
         tc class add dev "$DEV" parent 1: classid 1:1 htb rate 1000mbit ceil 1000mbit 2>/dev/null
     fi
     modprobe ifb numifbs=0 2>/dev/null
+    # Record the devices this hook creates, so uninstall removes only ours.
     if ! ip link show "$IFB" >/dev/null 2>&1; then
-        ip link add "$IFB" type ifb 2>/dev/null
+        ip link add "$IFB" type ifb 2>/dev/null && echo "$IFB" >> "$IFB_STATE" 2>/dev/null
     fi
     ip link set "$IFB" up 2>/dev/null
     if ! tc qdisc show dev "$IFB" 2>/dev/null | grep -q 'qdisc htb 1:'; then
