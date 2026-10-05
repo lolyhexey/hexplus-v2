@@ -14,6 +14,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/lolyhexey/hexplus/internal/firewall"
+	"github.com/lolyhexey/hexplus/internal/portclaim"
 	"github.com/lolyhexey/hexplus/internal/progress"
 	"github.com/lolyhexey/hexplus/internal/service"
 	"github.com/lolyhexey/hexplus/internal/sslhmux"
@@ -148,6 +150,9 @@ func sslhMuxInstall(r *bufio.Reader) error {
 		{Label: "เขียน systemd unit", Work: func() error {
 			return sslhmux.WriteUnit(cfg)
 		}},
+		{Label: "เปิดพอร์ตใน firewall", Work: func() error {
+			return firewall.OpenPort("tcp", port, firewall.RCLocalPath)
+		}},
 		{Label: "เริ่ม SSLH MULTIPLEX", Work: func() error {
 			if err := systemctlRun("enable", "--now", sslhmux.UnitName); err != nil {
 				return err
@@ -188,9 +193,13 @@ func sslhMuxUninstall(r *bufio.Reader) error {
 
 	if err := progress.Run([]progress.Step{
 		{Label: "หยุด + ลบ SSLH MULTIPLEX", Work: func() error {
+			cfg, _ := sslhmux.Load() // its port, before the config goes
 			_ = systemctlRun("disable", "--now", sslhmux.UnitName)
 			_ = sslhmux.RemoveUnit()
 			_ = os.Remove(sslhmux.DBPath)
+			if cfg.Port > 0 {
+				return firewall.ClosePort("tcp", cfg.Port, firewall.RCLocalPath, portclaim.HeldByOther(portclaim.SSLH))
+			}
 			return nil
 		}},
 	}); err != nil {

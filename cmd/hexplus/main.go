@@ -30,9 +30,11 @@ import (
 
 	"github.com/lolyhexey/hexplus/internal/assets"
 	"github.com/lolyhexey/hexplus/internal/extract"
+	"github.com/lolyhexey/hexplus/internal/firewall"
 	"github.com/lolyhexey/hexplus/internal/install"
 	"github.com/lolyhexey/hexplus/internal/menu"
 	"github.com/lolyhexey/hexplus/internal/pki"
+	"github.com/lolyhexey/hexplus/internal/portclaim"
 	"github.com/lolyhexey/hexplus/internal/proxy"
 	"github.com/lolyhexey/hexplus/internal/service"
 	"github.com/lolyhexey/hexplus/internal/sslhmux"
@@ -755,6 +757,9 @@ func runProxyAdd(args []string) {
 		fmt.Fprintln(os.Stderr, "proxy add:", err)
 		os.Exit(1)
 	}
+	if err := firewall.OpenPort("tcp", cfg.Port, firewall.RCLocalPath); err != nil {
+		fmt.Fprintln(os.Stderr, "proxy add (firewall):", err)
+	}
 	unitPath, written, reloadErr, err := proxy.WriteUnit(cfg)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "proxy add (unit):", err)
@@ -815,6 +820,9 @@ func runProxyRemove(args []string) {
 	if err := db.Save(); err != nil {
 		fmt.Fprintln(os.Stderr, "proxy remove:", err)
 		os.Exit(1)
+	}
+	if err := firewall.ClosePort("tcp", cfg.Port, firewall.RCLocalPath, portclaim.HeldByOther(portclaim.Proxy(cfg.Name))); err != nil {
+		fmt.Fprintln(os.Stderr, "proxy remove (firewall):", err)
 	}
 	unitPath, removed, reloadErr, err := proxy.RemoveUnit(cfg)
 	if err != nil {

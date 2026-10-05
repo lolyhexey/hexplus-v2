@@ -28,6 +28,7 @@ import (
 	"github.com/lolyhexey/hexplus/internal/firewall"
 	"github.com/lolyhexey/hexplus/internal/ovpnspread"
 	"github.com/lolyhexey/hexplus/internal/panel"
+	"github.com/lolyhexey/hexplus/internal/portclaim"
 	"github.com/lolyhexey/hexplus/internal/proxy"
 	"github.com/lolyhexey/hexplus/internal/service"
 	"github.com/lolyhexey/hexplus/internal/sslhmux"
@@ -953,7 +954,8 @@ func changeServicePort(r *bufio.Reader, svc service.Service) error {
 		// The INPUT rule and its rc.local line follow the port; otherwise
 		// the old port stays open at every boot and a host whose INPUT
 		// policy is DROP never lets clients reach the new one.
-		if err := firewall.MoveInput(ovpnProto(), currentPort, newPort, firewall.RCLocalPath); err != nil {
+		// The old port stays open if another hexplus service listens there.
+		if err := firewall.MoveInput(ovpnProto(), currentPort, newPort, firewall.RCLocalPath, portclaim.HeldByOther(portclaim.OpenVPN)); err != nil {
 			fmt.Println("\n" + cYelBold + "คำเตือน: ย้ายกฎ INPUT ไปพอร์ตใหม่ไม่สำเร็จ ลูกค้าอาจต่อพอร์ตใหม่ไม่ได้: " + err.Error() + cReset)
 		}
 		// The spreading rules match the primary port.

@@ -14,6 +14,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/lolyhexey/hexplus/internal/firewall"
+	"github.com/lolyhexey/hexplus/internal/portclaim"
 	"github.com/lolyhexey/hexplus/internal/progress"
 	"github.com/lolyhexey/hexplus/internal/service"
 	"github.com/lolyhexey/hexplus/internal/ssltunnel"
@@ -158,6 +160,9 @@ func sslTunnelInstall(r *bufio.Reader, target string) error {
 		{Label: "เขียน systemd unit", Work: func() error {
 			return ssltunnel.WriteUnit(cfg)
 		}},
+		{Label: "เปิดพอร์ตใน firewall", Work: func() error {
+			return firewall.OpenPort("tcp", port, firewall.RCLocalPath)
+		}},
 		{Label: "เริ่ม SSL TUNNEL", Work: func() error {
 			if err := systemctlRun("enable", "--now", ssltunnel.UnitName); err != nil {
 				return err
@@ -198,6 +203,12 @@ func sslTunnelUninstall(r *bufio.Reader) error {
 
 	if err := progress.Run([]progress.Step{
 		{Label: "หยุด + ลบ SSL TUNNEL", Work: func() error {
+			cfg, _ := ssltunnel.Load() // its port, before the config goes
+			defer func() {
+				if cfg.Port > 0 {
+					_ = firewall.ClosePort("tcp", cfg.Port, firewall.RCLocalPath, portclaim.HeldByOther(portclaim.SSLTunnel))
+				}
+			}()
 			_ = systemctlRun("disable", "--now", ssltunnel.UnitName)
 			_ = ssltunnel.RemoveUnit()
 			_ = os.Remove(ssltunnel.CertFile)
@@ -245,12 +256,16 @@ func sslTunnelChangePort(r *bufio.Reader, cfg ssltunnel.Config) error {
 		return nil
 	}
 
+	oldPort := cfg.Port
 	cfg.Port = port
 	if err := cfg.Save(); err != nil {
 		return err
 	}
 	if err := ssltunnel.WriteUnit(cfg); err != nil {
 		return err
+	}
+	if err := firewall.MoveInput("tcp", oldPort, port, firewall.RCLocalPath, portclaim.HeldByOther(portclaim.SSLTunnel)); err != nil {
+		fmt.Println("\n" + cYelBold + "คำเตือน: ย้ายกฎ INPUT ไปพอร์ตใหม่ไม่สำเร็จ: " + err.Error() + cReset)
 	}
 	if err := systemctlRun("restart", ssltunnel.UnitName); err != nil {
 		fmt.Println("\n" + cYelBold + "คำเตือน: รีสตาร์ทไม่สำเร็จ: " + err.Error() + cReset)
